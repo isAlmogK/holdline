@@ -17,6 +17,8 @@ const DOC = '00000000-0000-0000-0000-0000000000c1'
 const ANON_KEY = { role: 'anon', iss: 'supabase', ref: 'demo', iat: 1700000000, exp: 2000000000 }
 
 const SCHEMA = `
+create role editors; grant editors to authenticated with inherit true;
+create role visitors; grant visitors to anon with inherit true;
 create table public.members (org_id uuid not null, user_id uuid not null, role text not null);
 create table public.docs (id uuid primary key, org_id uuid, owner_id uuid, status text, n int, deleted_at timestamptz);
 alter table public.docs enable row level security;
@@ -196,6 +198,8 @@ describe('normalization is never stronger than the SQL', () => {
     ['jwt claim IN list', select("(auth.jwt() -> 'app_metadata' ->> 'tier') in ('gold', 'silver')"), 'read'],
     ['column <> auth.uid()', select('owner_id <> auth.uid()'), 'read'],
     ['literal < column', select('3 < n'), 'read', { anonKey: true }],
+    ['custom role granted to authenticated', select("owner_id = auth.uid() or status = 'a'", 'editors'), 'read'],
+    ['custom role granted to anon', select("status = 'a'", 'visitors') + select('owner_id = auth.uid()', 'authenticated', 'q'), 'read', { anonKey: true }],
   ]
   cases.forEach(([name, sql, op, opts], i) => {
     it(name, async () => { await checkSound(sql, op, 1000 + i, opts) })

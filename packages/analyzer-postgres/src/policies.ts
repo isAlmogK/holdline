@@ -17,10 +17,10 @@ const TRUE_ = (): Normalized => ({ expr: { and: [] }, functions: [] })
 // Which modeled callers a policy's roles cover. Plain: any role other than public may be the caller's ('some').
 type Cover = 'both' | 'signed-in' | 'anonymous' | 'some' | 'none'
 
-function coverOf(roles: readonly string[], dialect: Dialect): Cover {
-  if (roles.includes('public')) return 'both'
+function coverOf(row: PolicyRow, dialect: Dialect): Cover {
+  if (row.roles.includes('public')) return 'both'
   if (dialect === 'plain') return 'some'
-  const [signed, anon] = [roles.includes('authenticated'), roles.includes('anon')]
+  const [signed, anon] = [row.coversSignedIn, row.coversAnon]
   return signed && anon ? 'both' : signed ? 'signed-in' : anon ? 'anonymous' : 'none'
 }
 
@@ -63,7 +63,7 @@ export function buildPolicies(
   const diagnostics: Diagnostic[] = []
   const coverage = new Map<PolicyRow, Cover>()
   for (const row of rows) {
-    const cover = coverOf(row.roles, dialect)
+    const cover = coverOf(row, dialect)
     coverage.set(row, cover)
     if (cover === 'none') {
       diagnostics.push({

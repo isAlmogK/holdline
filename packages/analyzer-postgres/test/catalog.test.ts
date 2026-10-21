@@ -22,8 +22,8 @@ describe('readCatalog', () => {
     const c = await readCatalog(run.db, 'supabase')
     expect(c.tables.map(t => t.id)).toEqual(['pg:public.docs'])
     expect(c.policies).toEqual([
-      { schema: 'public', table: 'docs', name: 'anon none', cmd: 'r', permissive: false, roles: ['anon'], using: 'false', check: null },
-      { schema: 'public', table: 'docs', name: 'own', cmd: 'w', permissive: true, roles: ['authenticated'], using: 'mine(owner_id)', check: '(owner_id = auth.uid())' },
+      { schema: 'public', table: 'docs', name: 'anon none', cmd: 'r', permissive: false, roles: ['anon'], coversSignedIn: false, coversAnon: true, using: 'false', check: null },
+      { schema: 'public', table: 'docs', name: 'own', cmd: 'w', permissive: true, roles: ['authenticated'], coversSignedIn: true, coversAnon: false, using: 'mine(owner_id)', check: '(owner_id = auth.uid())' },
     ])
     expect(c.relations.get('public.docs')).toEqual(new Set(['id', 'owner_id']))
     expect(c.relations.get('auth.users')).toEqual(new Set(['id', 'email']))
@@ -66,5 +66,48 @@ describe('readCatalog function details', () => {
   it('keeps only input argument names', async () => {
     const c = await readCatalog(r2.db, 'supabase')
     expect(c.functions.get('public.without/2')?.argNames).toEqual(['a', 'b'])
+  })
+})
+
+describe('readCatalog role coverage', () => {
+  let r3: MigrationRun
+  beforeAll(async () => {
+    r3 = await runMigrations([{ path: 'm.sql', sql: `
+      create role editors; grant editors to authenticated with inherit true;
+      create role visitors; grant visitors to anon with inherit true;
+      create role everyone; grant everyone to anon, authenticated with inherit true;
+      create role reviewers; grant reviewers to authenticated; -- authenticated is NOINHERIT, so this grant does not inherit
+      create table public.docs (id int);
+      create policy "to public" on public.docs for select using (true);
+      create policy "to both" on public.docs for select to anon, authenticated using (true);
+      create policy "to service" on public.docs for select to service_role using (true);
+      create policy "to editors" on public.docs for select to editors using (true);
+      create policy "to visitors" on public.docs for select to visitors using (true);
+      create policy "to everyone" on public.docs for select to everyone using (true);
+      create policy "to reviewers" on public.docs for select to reviewers using (true);
+    ` }], 'supabase')
+    if (r3.failure) throw new Error(r3.failure.message)
+  })
+  afterAll(async () => { await r3.db.close() })
+
+  // Postgres applies a policy to a caller whose role has the privileges of one of the policy's roles (pg_has_role USAGE).
+  it('covers the callers whose role has the privileges of a policy role', async () => {
+    const c = await readCatalog(r3.db, 'supabase')
+    expect(Object.fromEntries(c.policies.map(p => [p.name, [p.coversSignedIn, p.coversAnon]]))).toEqual({
+      'to public': [true, true], 'to both': [true, true], 'to service': [false, false], 'to editors': [true, false],
+      'to visitors': [false, true], 'to everyone': [true, true], 'to reviewers': [false, false],
+    })
+  })
+  it('covers nobody but public in the plain dialect, where anon and authenticated need not exist', async () => {
+    const plain = await runMigrations([{ path: 'm.sql', sql: `
+      create role app_user;
+      create table public.docs (id int);
+      create policy "to public" on public.docs for select using (true);
+      create policy "to app" on public.docs for select to app_user using (true);
+    ` }], 'plain')
+    try {
+      const c = await readCatalog(plain.db, 'plain')
+      expect(c.policies.map(p => [p.name, p.coversSignedIn, p.coversAnon])).toEqual([['to app', false, false], ['to public', true, true]])
+    } finally { await plain.db.close() }
   })
 })

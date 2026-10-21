@@ -35,8 +35,11 @@ const condition: ConditionOf = (sql, _table, side) => {
   const e = EXPRS[sql]!
   return { expr: side === 'incoming' ? JSON.parse(JSON.stringify(e).replaceAll('resource.', 'incoming.')) : e, functions: sql === 'owner' ? ['public.f'] : [] }
 }
+// Coverage as readCatalog computes it for the shim's roles (none inherits another).
+const covers = (roles: readonly string[]) =>
+  ({ coversSignedIn: roles.some(r => r === 'public' || r === 'authenticated'), coversAnon: roles.some(r => r === 'public' || r === 'anon') })
 const row = (over: Partial<PolicyRow>): PolicyRow =>
-  ({ schema: 'public', table: 'docs', name: 'p', cmd: 'r', permissive: true, roles: ['public'], using: 'owner', check: null, ...over })
+  ({ schema: 'public', table: 'docs', name: 'p', cmd: 'r', permissive: true, roles: ['public'], using: 'owner', check: null, ...covers(over.roles ?? ['public']), ...over })
 const at = () => ({ file: 'm.sql', line: 3 })
 
 describe('buildPolicies', () => {
@@ -88,6 +91,15 @@ describe('buildPolicies', () => {
       analyzer: 'postgres', file: 'm.sql', severity: 'warning',
       message: 'policy "svc" on public.docs applies only to roles service_role; Holdline models the anon and authenticated roles, so it was skipped',
     }])
+  })
+  it('uses the coverage readCatalog computed, so a custom role granted to authenticated counts', () => {
+    const { policies, diagnostics } = buildPolicies([
+      row({ name: 'editors', roles: ['editors'], coversSignedIn: true, coversAnon: false, using: 'true' }),
+      row({ name: 'r', roles: ['visitors'], coversSignedIn: false, coversAnon: true, permissive: false, using: 'live' }),
+    ], 'supabase', condition, at)
+    const want = { and: [AUTH, { and: [AUTH, { and: [] }] }, { or: [AUTH, EXPRS.live] }] }
+    expect(policies.map(p => p.condition)).toEqual([want, want]) // read and list
+    expect(diagnostics).toEqual([])
   })
   it('keeps plain-dialect policies for any role and drops their restrictive ones', () => {
     const { policies, diagnostics } = buildPolicies([

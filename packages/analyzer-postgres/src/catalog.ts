@@ -33,6 +33,10 @@ export interface PolicyRow {
   cmd: 'r' | 'a' | 'w' | 'd' | '*'
   permissive: boolean
   roles: string[] // 'public' for PUBLIC
+  // The policy applies to a caller with role authenticated (anon): PUBLIC, or a role whose privileges that role has
+  // (pg_has_role USAGE, as Postgres decides). False when the role does not exist (the plain dialect).
+  coversSignedIn: boolean
+  coversAnon: boolean
   using: string | null // pg_get_expr(polqual)
   check: string | null // pg_get_expr(polwithcheck)
 }
@@ -82,6 +86,9 @@ async function readFunctions(db: Queryable): Promise<Map<string, SqlFunction>> {
   return functions
 }
 
+const covers = (role: string) => `coalesce((select bool_or(r = 0 or pg_has_role(
+  (select oid from pg_roles where rolname = '${role}'), r, 'USAGE')) from unnest(p.polroles) r), false)`
+
 // In a transaction with a local search_path, so the caller's session is left as it was.
 export function readCatalog(db: PGlite, dialect: Dialect): Promise<Catalog> {
   return db.transaction(async tx => {
@@ -107,6 +114,7 @@ async function readAll(db: Queryable, dialect: Dialect): Promise<Catalog> {
   const rows = (await db.query<PolicyRow>(`
     select n.nspname as schema, c.relname as "table", p.polname as name, p.polcmd as cmd, p.polpermissive as permissive,
       array(select case when r = 0 then 'public' else pg_get_userbyid(r)::text end from unnest(p.polroles) r) as roles,
+      ${covers('authenticated')} as "coversSignedIn", ${covers('anon')} as "coversAnon",
       pg_get_expr(p.polqual, p.polrelid) as "using", pg_get_expr(p.polwithcheck, p.polrelid) as "check"
     from pg_policy p join pg_class c on c.oid = p.polrelid join pg_namespace n on n.oid = c.relnamespace
     order by 1, 2, 3`)).rows
