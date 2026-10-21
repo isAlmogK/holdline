@@ -115,6 +115,8 @@ export const RulesFileSchema = z.strictObject({
   version: z.literal(1),
   vocabulary: z.array(VocabularyEntrySchema).default([]),
   rules: z.array(RuleSchema).default([]),
+  // Highest rule id ever assigned, so a deleted rule's id is never reused.
+  lastRuleId: z.number().int().min(0).optional(),
 })
 export type RulesFile = z.output<typeof RulesFileSchema>
 
@@ -185,6 +187,6 @@ export function vocabularyMap(file: RulesFile, extra: ProposedVocabulary[] = [])
 }
 
 export function nextRuleId(file: RulesFile): string {
-  const max = file.rules.reduce((m, r) => Math.max(m, Number(r.id.slice(2))), 0)
+  const max = file.rules.reduce((m, r) => Math.max(m, Number(r.id.slice(2))), file.lastRuleId ?? 0)
   return `R-${String(max + 1).padStart(3, '0')}`
 }
