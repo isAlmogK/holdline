@@ -1,6 +1,6 @@
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
-import type { Atom, Expr } from '../src/expr.js'
+import type { Atom, Expr, Literal, Operand } from '../src/expr.js'
 import { atomImplies, collectRefs, expand, flattenAnd, implies, mentionsOperand, prove, renameParams } from '../src/logic.js'
 
 const a = (atom: Atom): Expr => ({ atom })
@@ -126,5 +126,148 @@ describe('helpers', () => {
     expect(mentionsOperand(e, 'resource.owner_id')).toBe(true)
     expect(mentionsOperand(e, 'incoming.owner_id')).toBe(false)
     expect(flattenAnd(e)).toEqual([{ ref: 'x' }, owner, { not: { ref: 'y' } }])
+  })
+})
+
+// Soundness against a finite model: whenever implies(c, r) is ok, r holds in every world where c holds.
+describe('prover soundness (model based)', () => {
+  type Actor = { uid: string; role: string; claims: Record<string, string> } | null
+  type World = { actor: Actor; resource: Record<string, string | null>; present: ReadonlySet<string> }
+  const NO_ACTOR = Symbol('no actor')
+
+  const memberDoc = '/teams/{resource.team_id}/members/{actor.uid}'
+  const adminDoc = '/admins/{actor.uid}'
+  const vocab = new Map<string, Expr>([['staff', a({ op: 'in', left: 'actor.role', right: { literal: ['admin', 'member'] } })]])
+
+  const actors: Actor[] = [null]
+  for (const uid of ['u1', 'u2']) for (const role of ['admin', 'member']) for (const t of ['a', 'b']) actors.push({ uid, role, claims: { t } })
+  const resources: Record<string, string | null>[] = []
+  for (const owner_id of ['u1', 'u2', null]) for (const team_id of ['t1', null]) for (const deleted_at of [null, 'd1']) resources.push({ owner_id, team_id, deleted_at })
+  const paths = [
+    ...['t1', 'null'].flatMap(team => ['u1', 'u2'].map(uid => `/teams/${team}/members/${uid}`)),
+    '/admins/u1', '/admins/u2',
+  ]
+  const worlds: World[] = []
+  for (const actor of actors) for (const resource of resources) for (let mask = 0; mask < 1 << paths.length; mask++) {
+    worlds.push({ actor, resource, present: new Set(paths.filter((_, i) => mask & (1 << i))) })
+  }
+
+  const value = (o: Operand, w: World): Literal | typeof NO_ACTOR => {
+    if (typeof o !== 'string') return o.literal
+    if (o.startsWith('actor.')) {
+      if (!w.actor) return NO_ACTOR
+      if (o === 'actor.uid') return w.actor.uid
+      if (o === 'actor.role') return w.actor.role
+      return w.actor.claims[o.slice('actor.claim.'.length)] ?? null
+    }
+    if (o.startsWith('resource.')) return w.resource[o.slice('resource.'.length)] ?? null
+    return null
+  }
+  // Atoms with actor operands are false for an anonymous caller (actor null).
+  const evalAtom = (at: Atom, w: World): boolean => {
+    switch (at.op) {
+      case 'authenticated': return w.actor !== null
+      case 'exists': {
+        if (at.doc.includes('{actor.') && !w.actor) return false
+        const path = at.doc.replace(/\{([^}]+)\}/g, (_, op: string) => String(value(op, w)))
+        return w.present.has(path)
+      }
+      case 'isNull': {
+        const v = value(at.operand, w)
+        return v !== NO_ACTOR && v === null
+      }
+      default: {
+        const l = value(at.left, w)
+        const r = value(at.right, w)
+        if (l === NO_ACTOR || r === NO_ACTOR) return false
+        if (at.op === 'eq') return l === r
+        if (at.op === 'ne') return l !== r
+        if (at.op === 'in') return Array.isArray(r) && (r as Literal[]).includes(l)
+        return typeof l === 'number' && typeof r === 'number' && (at.op === 'lt' ? l < r : l > r)
+      }
+    }
+  }
+  // `opaque` (and an unknown ref, which expands to opaque) takes the value `opaqueAs`.
+  const evalExpr = (e: Expr, w: World, opaqueAs: boolean): boolean => {
+    if ('and' in e) return e.and.every(x => evalExpr(x, w, opaqueAs))
+    if ('or' in e) return e.or.some(x => evalExpr(x, w, opaqueAs))
+    if ('not' in e) return !evalExpr(e.not, w, opaqueAs)
+    if ('atom' in e) return evalAtom(e.atom, w)
+    if ('ref' in e) { const d = vocab.get(e.ref); return d ? evalExpr(d, w, opaqueAs) : opaqueAs }
+    return opaqueAs
+  }
+
+  const pool: Expr[] = [
+    a({ op: 'authenticated' }),
+    a({ op: 'in', left: 'actor.role', right: { literal: ['admin'] } }),
+    a({ op: 'in', left: 'actor.role', right: { literal: ['admin', 'member'] } }),
+    a({ op: 'in', left: 'actor.role', right: { literal: [] } }),
+    a({ op: 'eq', left: { literal: 'admin' }, right: 'actor.role' }),
+    a({ op: 'eq', left: 'actor.role', right: { literal: 'member' } }),
+    a({ op: 'eq', left: 'actor.uid', right: 'resource.owner_id' }),
+    a({ op: 'eq', left: 'resource.owner_id', right: 'actor.uid' }),
+    a({ op: 'ne', left: 'actor.uid', right: 'resource.owner_id' }),
+    a({ op: 'ne', left: 'actor.role', right: { literal: 'admin' } }),
+    a({ op: 'eq', left: 'actor.claim.t', right: { literal: true } }),
+    a({ op: 'eq', left: 'actor.uid', right: { literal: 'u1' } }),
+    a({ op: 'eq', left: 'actor.uid', right: { literal: null } }),
+    a({ op: 'eq', left: 'actor.claim.t', right: { literal: 'a' } }),
+    a({ op: 'in', left: 'actor.claim.t', right: { literal: ['a', 'b'] } }),
+    a({ op: 'isNull', operand: 'resource.deleted_at' }),
+    a({ op: 'isNull', operand: 'resource.team_id' }),
+    a({ op: 'isNull', operand: 'actor.uid' }),
+    a({ op: 'exists', doc: memberDoc }),
+    a({ op: 'exists', doc: adminDoc }),
+    { ref: 'staff' }, { ref: 'ghost' },
+    { opaque: 'o1' }, { opaque: 'o2' },
+  ]
+  // True when the claim "c implies r" holds in every world, with opaque taken as true and as false on each side.
+  const sound = (c: Expr, r: Expr): boolean => {
+    for (const w of worlds) {
+      for (const cOpaque of [true, false]) {
+        if (!evalExpr(c, w, cOpaque)) continue
+        for (const rOpaque of [true, false]) if (!evalExpr(r, w, rOpaque)) return false
+      }
+    }
+    return true
+  }
+
+  it('is sound for every pair of pool atoms and their negations', () => {
+    const leaves = [...pool, ...pool.map(x => ({ not: x }))]
+    const unsound: string[] = []
+    for (const c of leaves) for (const r of leaves) {
+      if (implies(c, r, vocab).ok && !sound(c, r)) unsound.push(`${JSON.stringify(c)} => ${JSON.stringify(r)}`)
+    }
+    expect(unsound).toEqual([])
+  })
+
+  const leaf = fc.constantFrom(...pool)
+  const expr: fc.Arbitrary<Expr> = fc.letrec<{ e: Expr }>(tie => ({
+    e: fc.oneof(
+      { depthSize: 'small', withCrossShrink: true },
+      leaf,
+      fc.array(tie('e'), { maxLength: 3 }).map(xs => ({ and: xs })),
+      fc.array(tie('e'), { maxLength: 3 }).map(xs => ({ or: xs })),
+      tie('e').map(x => ({ not: x })),
+    ),
+  })).e
+  // Bias towards pairs the prover can prove, so the property is exercised, not vacuous.
+  const pair: fc.Arbitrary<[Expr, Expr]> = fc.oneof(
+    fc.tuple(expr, expr),
+    fc.tuple(leaf, leaf, expr, expr).map(([p, q, y, z]): [Expr, Expr] => [{ and: [y, p] }, { or: [z, q] }]),
+    fc.tuple(expr, expr).map(([x, y]): [Expr, Expr] => [{ and: [y, x] }, x]),
+    fc.tuple(expr, expr).map(([x, y]): [Expr, Expr] => [x, { or: [y, x] }]),
+    expr.map((x): [Expr, Expr] => [x, x]),
+    fc.tuple(expr, expr, expr).map(([x, y, z]): [Expr, Expr] => [{ or: [{ and: [x, y] }, { and: [z, x] }] }, { or: [x, y] }]),
+  )
+
+  it('never proves a requirement that some world violates', () => {
+    let proved = 0
+    fc.assert(fc.property(pair, ([c, r]) => {
+      if (!implies(c, r, vocab).ok) return true
+      proved++
+      return sound(c, r)
+    }), { numRuns: 300 })
+    expect(proved).toBeGreaterThan(50)
   })
 })
