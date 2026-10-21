@@ -121,4 +121,25 @@ describe('firestore invariant tests', () => {
     const r = rule({ type: 'invariant', target: { store: 'firestore', path: '/other/{id}' }, kind: 'not-null', columns: ['a'] })
     expect(generateTests(r, vocab, fsFacts)!.skipped).toEqual(['create: no create policy for /other/{id} in the facts that cases can be generated for'])
   })
+  const withSecond = (cond: unknown) => parseFacts({ version: 1, policies: [
+    { id: 'firestore:/projects/{projectId}#create@5', store: 'firestore', target: '/projects/{projectId}', ops: ['create'], condition },
+    { id: 'firestore:/projects/{projectId}#create@9', store: 'firestore', target: '/projects/{projectId}', ops: ['create'], condition: cond },
+  ] })
+  const nn = rule({ type: 'invariant', target: { store: 'firestore', path: '/projects/{id}' }, kind: 'not-null', columns: ['orgId'] })
+
+  it('skips the deny case when another create policy allows it', () => {
+    const f = generateTests(nn, vocab, withSecond({ and: [{ atom: { op: 'authenticated' } }] }))!
+    expect(f.cases.map(c => c.expect)).toEqual(['allow'])
+    expect(f.skipped).toEqual(['create: cannot deny only orgId (another create policy allows it: firestore:/projects/{projectId}#create@9)'])
+  })
+  it('skips the deny case when another create policy cannot be evaluated', () => {
+    const f = generateTests(nn, vocab, withSecond({ opaque: 'custom()' }))!
+    expect(f.cases.map(c => c.expect)).toEqual(['allow'])
+    expect(f.skipped).toEqual(['create: cannot deny only orgId (create policy firestore:/projects/{projectId}#create@9 cannot be evaluated)'])
+  })
+  it('keeps the deny case when another create policy needs something the denied write lacks', () => {
+    const f = generateTests(nn, vocab, withSecond({ and: [{ atom: { op: 'eq', left: 'actor.claim.admin', right: { literal: true } } }] }))!
+    expect(f.cases.map(c => c.expect)).toEqual(['allow', 'deny'])
+    expect(f.skipped).toEqual([])
+  })
 })

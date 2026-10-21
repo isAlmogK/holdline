@@ -1,6 +1,6 @@
 import { FactIndex } from './fact-index.js'
 import type { Atom } from './expr.js'
-import type { Facts } from './facts.js'
+import type { Facts, Policy } from './facts.js'
 import { expand, flattenAnd } from './logic.js'
 import type { DataAccessRule, InvariantRule } from './rules.js'
 import type { TestCase, TestFile } from './testcase.js'
@@ -18,23 +18,40 @@ export function firestoreInvariantCases(rule: InvariantRule, facts: Facts | unde
   const target = rule.target
   const none = { cases: [], skipped: [`create: no create policy for ${target.path} in the facts that cases can be generated for`] }
   if (!facts || (rule.kind !== 'not-null' && rule.kind !== 'enum')) return none
-  for (const policy of new FactIndex(facts).policies(target, 'create')) {
+  const policies = new FactIndex(facts).policies(target, 'create')
+  for (const policy of policies) {
     const access: DataAccessRule = { id: rule.id, text: rule.text, type: 'data-access', target, ops: ['create'], requires: policy.condition, evidence: [], status: 'approved' }
     const world = allowWorld(access, rule)
     if (!world) continue
     const cases: TestCase[] = []
+    const skipped: string[] = []
     const allowName = rule.kind === 'enum' ? `create: allowed with a valid ${rule.columns.join(', ')}` : `create: allowed with ${rule.columns.join(', ')} set`
     cases.push(toCase(allowName, world, world, access, 'create', 'allow'))
     for (const c of rule.columns) {
       const denied = structuredClone(world)
       if (rule.kind === 'enum') denied.incoming[c] = INVALID_ENUM
       else delete denied.incoming[c]
+      // Firestore ORs the create rules, so another policy that lets the denied write through makes the case wrong.
+      const why = otherPolicyAllows(denied, policies.filter(p => p.id !== policy.id))
+      if (why) {
+        skipped.push(`create: cannot deny only ${c} (${why})`)
+        continue
+      }
       const name = rule.kind === 'enum' ? `create: denied with ${c} '${INVALID_ENUM}'` : `create: denied without ${c}`
       cases.push(toCase(name, denied, denied, access, 'create', 'deny'))
     }
-    return { cases, skipped: [] }
+    return { cases, skipped }
   }
   return none
+}
+
+function otherPolicyAllows(denied: World, others: Policy[]): string | undefined {
+  for (const other of others) {
+    const parts = flattenAnd(expand(other.condition, new Map()))
+    if (!parts.every((p): p is { atom: Atom } => 'atom' in p)) return `create policy ${other.id} cannot be evaluated`
+    if (parts.every(p => holds(denied, p.atom, 'create'))) return `another create policy allows it: ${other.id}`
+  }
+  return undefined
 }
 
 function allowWorld(access: DataAccessRule, rule: InvariantRule): World | undefined {
