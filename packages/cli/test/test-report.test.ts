@@ -28,7 +28,7 @@ describe('formatTestReport', () => {
       '  firestore: the Firebase emulator did not start: a',
       '    b',
       '',
-      '1 passed, 1 failed in 2 rules',
+      '1 passed, 1 failed in 2 rules (1 rule has no runnable cases)',
       '',
     ].join('\n'))
   })
@@ -49,7 +49,7 @@ describe('formatTestReport', () => {
       '',
       'allow cases are built from the facts when the file was generated; after changing policies run holdline test --regenerate',
       '',
-      '0 passed, 1 failed in 2 rules',
+      '0 passed, 1 failed in 2 rules (1 rule has no runnable cases)',
       '',
     ].join('\n'))
   })
@@ -64,12 +64,23 @@ describe('formatTestReport', () => {
     expect(out.split('\n')[0]).toBe('R-001 postgres: 1 passed (regenerated: --regenerate (the facts changed))')
   })
 
+  it('counts the rules that have no runnable cases', () => {
+    const files = [
+      { rule: 'R-001', store: 'postgres' as const, skipped: [], cases: [{ name: 'a', expect: 'allow' as const, actual: 'allow' as const, passed: true }] },
+      { rule: 'R-002', store: 'postgres' as const, cases: [], skipped: ['check expressions are tested statically only'] },
+      { rule: 'R-003', cases: [], skipped: ['not tested: no cases can be generated for access rules'] },
+    ]
+    expect(formatTestReport({ files, infrastructure: [] }, 'human').split('\n').at(-2)).toBe('1 passed, 0 failed in 3 rules (2 rules have no runnable cases)')
+    expect(formatTestReport({ files: files.slice(0, 2), infrastructure: [] }, 'human').split('\n').at(-2)).toBe('1 passed, 0 failed in 2 rules (1 rule has no runnable cases)')
+    expect(JSON.parse(formatTestReport({ files, infrastructure: [] }, 'json')).summary).toEqual({ passed: 1, failed: 0, rules: 3, noCases: 2 })
+  })
+
   it('prints only the summary when nothing ran', () => {
     expect(formatTestReport({ files: [], infrastructure: [] }, 'human')).toBe('0 passed, 0 failed in 0 rules\n')
   })
 
   it('prints json with a summary', () => {
     const json = JSON.parse(formatTestReport({ files: [{ rule: 'R-001', store: 'storage', cases: [{ name: 'a', expect: 'deny', actual: 'deny', passed: true }], skipped: [] }], infrastructure: [] }, 'json'))
-    expect(json.summary).toEqual({ passed: 1, failed: 0, rules: 1 })
+    expect(json.summary).toEqual({ passed: 1, failed: 0, rules: 1, noCases: 0 })
   })
 })

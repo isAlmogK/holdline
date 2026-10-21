@@ -26,7 +26,7 @@ describe('holdline test on postgres', () => {
     expect(json.infrastructure).toEqual([])
     expect(json.files.map((f: { rule: string; generated: string }) => [f.rule, f.generated])).toEqual(ALL.map(id => [id, 'missing']))
     expect(json.files.every((f: { store: string }) => f.store === 'postgres')).toBe(true)
-    expect(json.summary).toEqual({ passed: 24, failed: 0, rules: 9 })
+    expect(json.summary).toEqual({ passed: 24, failed: 0, rules: 9, noCases: 0 })
     expect(existsSync(join(r.root, '.holdline/tests/R-004.yaml'))).toBe(true)
     // A second run uses the files it wrote and loads no facts (this facts file does not exist).
     const again = await runCli(['test', '--facts', 'missing.json', '--format', 'json'], { cwd: r.root })
@@ -109,7 +109,7 @@ describe('holdline test on postgres', () => {
     const root = await copyFixture('test-pg')
     const otherStore = await runCli(['test', '--facts', 'missing.json', '--format', 'json', '--store', 'firestore'], { cwd: root })
     expect(otherStore.code, otherStore.stderr).toBe(0)
-    expect(JSON.parse(otherStore.stdout)).toEqual({ files: [], infrastructure: [], summary: { passed: 0, failed: 0, rules: 0 } })
+    expect(JSON.parse(otherStore.stdout)).toEqual({ files: [], infrastructure: [], summary: { passed: 0, failed: 0, rules: 0, noCases: 0 } })
     expect(existsSync(join(root, '.holdline/tests'))).toBe(false)
   }, SLOW)
 
@@ -205,7 +205,7 @@ describe('holdline test on postgres', () => {
     expect(JSON.parse(r.stdout)).toEqual({
       files: [],
       infrastructure: [{ store: 'firestore', message: 'no firestore rules file found' }, { store: 'storage', message: 'no storage rules file found' }],
-      summary: { passed: 0, failed: 0, rules: 0 },
+      summary: { passed: 0, failed: 0, rules: 0, noCases: 0 },
     })
   })
 
@@ -239,7 +239,7 @@ describe('holdline test on postgres', () => {
     const json = JSON.parse(fixed.stdout)
     // The rule did not change, the facts did: the file is labeled refreshed, not changed.
     expect(json.files.map((f: { rule: string; generated?: string; skipped: string[] }) => [f.rule, f.generated, f.skipped])).toEqual([['R-004', 'refreshed', []]])
-    expect(json.summary).toEqual({ passed: 2, failed: 0, rules: 1 })
+    expect(json.summary).toEqual({ passed: 2, failed: 0, rules: 1, noCases: 0 })
     const again = await runCli(['test', '--regenerate', '--facts', 'facts.json', '--format', 'json', '--rule', 'R-004'], { cwd: root })
     expect(JSON.parse(again.stdout).files[0].generated).toBeUndefined()
   }, SLOW)

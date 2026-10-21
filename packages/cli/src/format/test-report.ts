@@ -13,10 +13,11 @@ const GENERATED = {
   refreshed: 'regenerated: --regenerate (the facts changed)',
 } as const
 
-export function summarize(out: TestOutput): { passed: number; failed: number; rules: number } {
+// `noCases`: reported rules with no case that ran (notes, and files whose cases were all skipped).
+export function summarize(out: TestOutput): { passed: number; failed: number; rules: number; noCases: number } {
   const cases = out.files.flatMap(f => f.cases)
   const passed = cases.filter(c => c.passed).length
-  return { passed, failed: cases.length - passed, rules: out.files.length }
+  return { passed, failed: cases.length - passed, rules: out.files.length, noCases: out.files.filter(f => f.cases.length === 0).length }
 }
 
 export function formatTestReport(out: TestOutput, format: 'human' | 'json'): string {
@@ -39,6 +40,7 @@ export function formatTestReport(out: TestOutput, format: 'human' | 'json'): str
     for (const i of out.infrastructure) lines.push(`  ${i.store}: ${indent(i.message)}`)
   }
   if (lines.length > 0) lines.push('')
-  lines.push(`${summary.passed} passed, ${summary.failed} failed in ${summary.rules} ${summary.rules === 1 ? 'rule' : 'rules'}`)
+  const none = summary.noCases === 0 ? '' : summary.noCases === 1 ? ' (1 rule has no runnable cases)' : ` (${summary.noCases} rules have no runnable cases)`
+  lines.push(`${summary.passed} passed, ${summary.failed} failed in ${summary.rules} ${summary.rules === 1 ? 'rule' : 'rules'}${none}`)
   return `${lines.join('\n')}\n`
 }
