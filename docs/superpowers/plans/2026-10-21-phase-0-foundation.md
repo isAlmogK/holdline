@@ -1227,7 +1227,7 @@ git commit -m "feat(core): add fact graph schema and path pattern helpers"
   - `DEFAULT_ENFORCE: Record<RuleType, Enforce[]>`, `effectiveEnforce(rule: Rule): Enforce[]`
   - `vocabularyMap(file: RulesFile, extra?: VocabularyEntry[]): Map<string, Expr>`
   - `nextRuleId(file: RulesFile): string`
-  - `hashRule(rule: Rule): string` (12 hex chars over every field except `id`, `status`, `approved`, `muted`, `evidence`)
+  - `hashRule(rule: Rule, vocab: Vocabulary): string` (12 hex chars over every field except `id`, `status`, `approved`, `muted`, `evidence`, with `requires` expanded through the vocabulary so editing a predicate changes every rule that uses it)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1768,7 +1768,7 @@ git commit -m "feat(core): add FactIndex lookups over the fact graph"
 - Test: `packages/core/test/check.test.ts`
 
 **Interfaces:**
-- Consumes: `FactIndex` (Task 6), `implies`, `renameParams`, `mentionsOperand`, `Vocabulary` (Task 3), `alignParams`, `normalizeTable` (Task 4), rule types, `vocabularyMap` (Task 5), `hashRule` (Task 5), `formatExpr` (Task 2)
+- Consumes: `FactIndex` (Task 6), `implies`, `renameParams`, `mentionsOperand`, `Vocabulary` (Task 3), `alignParams`, `normalizeTable` (Task 4), rule types, `vocabularyMap` (Task 5), `hashRule(rule, vocab)` (Task 5), `formatExpr` (Task 2)
 - Produces:
   - `RESULT_STATUSES`, `type ResultStatus`, `type Result = { rule: string; status: ResultStatus; target: string; at?: { symbol: string; file?: string; line?: number }; message: string; unproven?: Expr; fix?: string }`
   - `type Summary = Record<ResultStatus, number> & { muted: number; rules: number }`, `summarize(results: Result[], muted: number): Summary`, `describeTarget(rule: Rule | ProposedRule): string`
@@ -1790,7 +1790,7 @@ import { summarize } from '../src/results.js'
 
 const approvedRule = (raw: Record<string, unknown>) => {
   const rule = RuleSchema.parse({ status: 'approved', ...raw })
-  return { ...rule, approved: { by: 't', at: '2026-10-21', hash: hashRule(rule) } }
+  return { ...rule, approved: { by: 't', at: '2026-10-21', hash: hashRule(rule, new Map()) } }
 }
 const file = (rules: Record<string, unknown>[], vocabulary: RulesFile['vocabulary'] = []): RulesFile =>
   ({ version: 1, vocabulary, rules: rules.map(approvedRule) })
@@ -2279,7 +2279,7 @@ export function evaluateRule(rule: Rule | ProposedRule, ctx: CheckContext): Chec
 
 export function checkRule(rule: Rule, ctx: CheckContext): Result[] {
   const target = describeTarget(rule)
-  if (!rule.approved || rule.approved.hash !== hashRule(rule)) {
+  if (!rule.approved || rule.approved.hash !== hashRule(rule, ctx.vocab)) {
     return [{ rule: rule.id, status: 'unapproved-edit', target, message: `"${rule.text}" was changed without approval. Approve it with \`holdline approve ${rule.id}\`, or restore it.` }]
   }
   const outcome = evaluateRule(rule, ctx)
@@ -2363,7 +2363,7 @@ describe('generateTests for firestore', () => {
 
   it('records the rule hash and store', () => {
     expect(file.rule).toBe('R-001')
-    expect(file.generatedFrom).toBe(hashRule(r))
+    expect(file.generatedFrom).toBe(hashRule(r, vocab))
     expect(file.store).toBe('firestore')
   })
   it('makes one allow case and one deny case per atom', () => {
@@ -2518,7 +2518,7 @@ class Unsupported extends Error {}
 
 export function generateTests(rule: Rule, vocab: Vocabulary): TestFile | undefined {
   if (rule.type !== 'data-access') return undefined
-  const base = { rule: rule.id, generatedFrom: hashRule(rule), store: rule.target.store, cases: [] as TestCase[], skipped: [] as string[] }
+  const base = { rule: rule.id, generatedFrom: hashRule(rule, vocab), store: rule.target.store, cases: [] as TestCase[], skipped: [] as string[] }
   const parts = flattenAnd(expand(rule.requires, vocab))
   if (!parts.every((p): p is { atom: Atom } => 'atom' in p)) {
     return { ...base, skipped: ['the requirement must be only "and" of atoms to generate cases; check it statically'] }
@@ -2909,7 +2909,7 @@ import { z } from 'zod'
 import { hashRule } from './hash.js'
 import { collectRefs } from './logic.js'
 import type { ProposalReport } from './proposals.js'
-import { ProposedRuleSchema, RuleSchema, VocabularyEntrySchema, nextRuleId, type ProposedRule, type Rule, type RulesFile } from './rules.js'
+import { ProposedRuleSchema, RuleSchema, VocabularyEntrySchema, nextRuleId, vocabularyMap, type ProposedRule, type Rule, type RulesFile } from './rules.js'
 
 const PendingRuleSchema = z.strictObject({
   key: z.string().regex(/^P-\d+$/),
@@ -2960,7 +2960,9 @@ export function approve(
 
   let next: RulesFile = { ...file, rules: [...file.rules], vocabulary: [...file.vocabulary] }
   const approved: { key: string; id: string }[] = []
-  const stamp = (rule: Rule): Rule => ({ ...rule, status: 'approved', muted: undefined, approved: { ...approval, hash: hashRule(rule) } })
+  // Pending vocabulary ids never clash with approved ones (validateProposals rejects clashes).
+  const vocab = vocabularyMap(file, pending.vocabulary)
+  const stamp = (rule: Rule): Rule => ({ ...rule, status: 'approved', muted: undefined, approved: { ...approval, hash: hashRule(rule, vocab) } })
 
   for (const key of wanted) {
     const existingIndex = next.rules.findIndex(r => r.id === key)
@@ -3534,7 +3536,7 @@ const admin = { atom: { op: 'in', left: 'actor.role', right: { literal: ['admin'
 
 function rulesFile(requires: unknown): string {
   const rule = RuleSchema.parse({ id: 'R-001', text: 'Only admins transfer dogs', type: 'access', target: { routes: 'POST /dogs/*/transfer' }, requires, evidence: ['h:transfer'], status: 'approved' })
-  const file: RulesFile = { version: 1, vocabulary: [], rules: [{ ...rule, approved: { by: 't', at: '2026-10-21', hash: hashRule(rule) } }] }
+  const file: RulesFile = { version: 1, vocabulary: [], rules: [{ ...rule, approved: { by: 't', at: '2026-10-21', hash: hashRule(rule, new Map()) } }] }
   return serializeRulesFile(file)
 }
 
@@ -3833,7 +3835,7 @@ export async function explainCommand(id: string, opts: { facts?: string }, io: I
   if ('requires' in rule) lines.push(`requires: ${formatExpr(rule.requires)}`)
   if (rule.status === 'muted' && rule.muted) lines.push(`muted by ${rule.muted.by} on ${rule.muted.at}: ${rule.muted.reason}`)
   if (rule.approved) {
-    const edited = rule.approved.hash !== hashRule(rule) ? ' (edited since approval)' : ''
+    const edited = rule.approved.hash !== hashRule(rule, vocabularyMap(file)) ? ' (edited since approval)' : ''
     lines.push(`approved by ${rule.approved.by} on ${rule.approved.at}${edited}`)
   } else {
     lines.push('not approved')
@@ -4871,7 +4873,7 @@ rules:
 ```ts
 // Dev-only: stamps every approved rule in a fixture rules file with its current hash.
 import { readFile, writeFile } from 'node:fs/promises'
-import { hashRule, parseRulesFile, serializeRulesFile } from '@holdline/core'
+import { hashRule, parseRulesFile, serializeRulesFile, vocabularyMap } from '@holdline/core'
 
 const path = process.argv[2]
 if (!path) {
@@ -4879,7 +4881,8 @@ if (!path) {
   process.exit(2)
 }
 const file = parseRulesFile(await readFile(path, 'utf8'), path)
-const rules = file.rules.map(r => (r.status === 'approved' && r.approved ? { ...r, approved: { ...r.approved, hash: hashRule(r) } } : r))
+const vocab = vocabularyMap(file)
+const rules = file.rules.map(r => (r.status === 'approved' && r.approved ? { ...r, approved: { ...r.approved, hash: hashRule(r, vocab) } } : r))
 await writeFile(path, serializeRulesFile({ ...file, rules }))
 console.log(`stamped ${rules.filter(r => r.status === 'approved').length} rules in ${path}`)
 ```
