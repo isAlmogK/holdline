@@ -14,6 +14,8 @@ export interface NormalizeEnv {
   catalog: CatalogIndex
   parse: SqlParse
   supabase: boolean // auth.uid(), auth.jwt() and auth.role() are Supabase's
+  searchPath: string[] // schemas an unqualified relation or function name resolves through, in order
+  positive: boolean // false under an odd number of NOTs: a subquery may then see fewer rows than assumed
   depth: number // helper function inlining depth
   functions: Set<string> // helper functions inlined so far, 'schema.name'
 }
@@ -33,7 +35,8 @@ export function normalizeCondition(
   if (!node) return { expr: { opaque: sql }, functions: [] }
   const functions = new Set<string>()
   const scope = tableScope(ctx.table, ctx.catalog.relations.get(ctx.table) ?? new Set(), ctx.side)
-  const expr = toExpr(node, { source, scope, catalog: ctx.catalog, parse: ctx.parse, supabase: ctx.supabase, depth: 0, functions })
+  const expr = toExpr(node, { source, scope, catalog: ctx.catalog, parse: ctx.parse, supabase: ctx.supabase,
+    searchPath: ctx.supabase ? ['public', 'extensions'] : ['public'], positive: true, depth: 0, functions })
   return { expr, functions: [...functions].sort() }
 }
 
@@ -44,7 +47,8 @@ export function toExpr(node: SqlNode, env: NormalizeEnv): Expr {
   const [kind, f] = k
   switch (kind) {
     case 'BoolExpr': {
-      const args = (f.args as SqlNode[]).map(a => toExpr(a, env))
+      const inner = f.boolop === 'NOT_EXPR' ? { ...env, positive: !env.positive } : env
+      const args = (f.args as SqlNode[]).map(a => toExpr(a, inner))
       return f.boolop === 'AND_EXPR' ? { and: args } : f.boolop === 'OR_EXPR' ? { or: args } : { not: args[0]! }
     }
     case 'A_Const': {

@@ -2,20 +2,25 @@ import type { Expr } from '@holdline/core'
 import type { NormalizeEnv } from './normalize.js'
 import { operand } from './operand.js'
 import { subqueryScope, type Scope } from './scope.js'
-import { kindOf, nameList, type SqlNode } from './sql-ast.js'
+import { constant, kindOf, nameList, type SqlNode } from './sql-ast.js'
+
+const AMBIGUOUS = /[&=?{}]/ // would make the doc ambiguous
 
 interface Query { table: string; scope: Scope; select: SqlNode; conditions: [string, string][] }
 
 // EXISTS (SELECT … FROM t WHERE t.a = <x> AND t.b = <y>) → exists(pg:<schema>.t?a={x}&b={y}).
+// Only in positive position: under RLS on t the subquery may see fewer rows, which makes `exists` too weak
+// to negate.
 export function existsSubquery(select: SqlNode, env: NormalizeEnv): Expr | undefined {
-  const q = singleTableQuery(select, env)
-  return q && existsAtom(q.table, q.conditions)
+  const q = env.positive ? singleTableQuery(select, env) : undefined
+  return q && plainTargets(q.select) ? existsAtom(q.table, q.conditions) : undefined
 }
 
 // <x> IN (SELECT t.a FROM t WHERE …) → the same exists with a={x}.
 export function inSubquery(sublink: SqlNode, env: NormalizeEnv): Expr | undefined {
   const op = nameList(sublink.operName)
   if (op.length > 1 || (op.length === 1 && op[0] !== '=')) return undefined
+  if (!env.positive) return undefined
   const left = operand(sublink.testexpr, env)
   const q = singleTableQuery(sublink.subselect, env)
   if (typeof left !== 'string' || !q) return undefined
@@ -30,10 +35,10 @@ function singleTableQuery(select: SqlNode | undefined, env: NormalizeEnv): Query
     || s.valuesLists || s.sortClause || s.lockingClause || s.windowClause || (s.op && s.op !== 'SETOP_NONE')) return undefined
   const from = s.fromClause as SqlNode[] | undefined
   const rv = from?.length === 1 ? (from[0]!.RangeVar as SqlNode | undefined) : undefined
-  if (!rv || rv.inh === false) return undefined
-  const table = `${rv.schemaname ?? 'public'}.${rv.relname}`
-  const columns = env.catalog.relations.get(table)
-  if (!columns) return undefined
+  if (!rv || rv.inh !== true || rv.alias?.colnames) return undefined // ONLY, or `t m(a, b)` renaming columns
+  const table = resolveRelation(rv, env)
+  const columns = table === undefined ? undefined : env.catalog.relations.get(table)
+  if (!table || !columns) return undefined
   const scope = subqueryScope(table, rv.alias?.aliasname ?? rv.relname, columns, env.scope)
   const conditions: [string, string][] = []
   for (const c of conjuncts(s.whereClause)) {
@@ -42,6 +47,20 @@ function singleTableQuery(select: SqlNode | undefined, env: NormalizeEnv): Query
     conditions.push(pair)
   }
   return { table, scope, select: s, conditions }
+}
+
+function resolveRelation(rv: SqlNode, env: NormalizeEnv): string | undefined {
+  if (rv.schemaname) return `${rv.schemaname}.${rv.relname}`
+  return env.searchPath.map(schema => `${schema}.${rv.relname}`).find(t => env.catalog.relations.has(t))
+}
+
+// `SELECT count(*)` returns a row even with no match, so only constants, `*` and plain columns are safe targets.
+function plainTargets(s: SqlNode): boolean {
+  return ((s.targetList as SqlNode[] | undefined) ?? []).every(t => {
+    const v = t.ResTarget?.val as SqlNode | undefined
+    const k = kindOf(v)
+    return k?.[0] === 'ColumnRef' || (k?.[0] === 'A_Const' && constant(v) !== undefined)
+  })
 }
 
 function conjuncts(where: SqlNode | undefined): SqlNode[] {
@@ -74,7 +93,7 @@ function innerColumn(node: SqlNode | undefined, scope: Scope): string | undefine
 
 // Columns sorted by name: two exists atoms match only when their docs are string-equal.
 function existsAtom(table: string, conditions: [string, string][]): Expr | undefined {
-  if (conditions.length === 0) return undefined
+  if (conditions.length === 0 || [table, ...conditions.map(([c]) => c)].some(n => AMBIGUOUS.test(n))) return undefined
   const byColumn = new Map<string, string>()
   for (const [col, o] of conditions) {
     if (byColumn.has(col) && byColumn.get(col) !== o) return undefined

@@ -26,10 +26,16 @@ const catalog: CatalogIndex = {
     fn('plpgsql_member', ['o'], ' begin return true; end ', { language: 'plpgsql' }),
     fn('two_statements', ['o'], ' select 1; select true '),
     fn('loop', ['o'], ' select public.loop(o) '),
+    fn('app_member', ['o'], ' select exists (select 1 from memberships where org_id = o) ', { searchPath: ['app'] }),
+    fn('empty_path_member', ['o'], ' select exists (select 1 from memberships where org_id = o) ', { searchPath: [] }),
+    fn('lower', ['x'], ' select true '),
+    fn('not_member', ['o'], ' select not public.is_member(o) '),
   ]),
+  builtins: new Set(['lower']),
 }
+const withApp: CatalogIndex = { ...catalog, relations: new Map([...catalog.relations, ['app.memberships', new Set(['org_id'])]]) }
 
-const run = (sql: string, side: Side = 'resource') => normalizeCondition(sql, { table: 'public.projects', side, catalog, parse, supabase: true })
+const run = (sql: string, side: Side = 'resource', cat = catalog) => normalizeCondition(sql, { table: 'public.projects', side, catalog: cat, parse, supabase: true })
 const norm = (sql: string, side: Side = 'resource') => run(sql, side).expr
 const exists = (doc: string) => ({ atom: { op: 'exists', doc } })
 const MEMBER = exists('pg:public.memberships?org_id={resource.org_id}&user_id={actor.uid}')
@@ -56,8 +62,25 @@ describe('EXISTS subqueries', () => {
       '(EXISTS ( SELECT 1 FROM memberships m WHERE ((m.org_id = projects.org_id) AND (m.org_id = projects.owner_id))))',
     ]) expect(norm(sql), sql).toHaveProperty('opaque')
   })
-  it('keeps NOT EXISTS as not(exists)', () => {
-    expect(norm('(NOT (EXISTS ( SELECT 1 FROM memberships m WHERE ((m.org_id = projects.org_id) AND (m.user_id = auth.uid())))))')).toEqual({ not: MEMBER })
+  it('is opaque in negative position (RLS on the inner table can hide rows)', () => {
+    const e = norm('(NOT (EXISTS ( SELECT 1 FROM memberships m WHERE ((m.org_id = projects.org_id) AND (m.user_id = auth.uid())))))')
+    expect(e).toHaveProperty('not.opaque')
+    expect(norm('(NOT (org_id IN ( SELECT m.org_id FROM memberships m WHERE (m.user_id = auth.uid()))))')).toHaveProperty('not.opaque')
+    expect(norm('(NOT (NOT (EXISTS ( SELECT 1 FROM memberships m WHERE ((m.org_id = projects.org_id) AND (m.user_id = auth.uid()))))))'))
+      .toEqual({ not: { not: MEMBER } })
+    expect(norm('(NOT is_member(org_id))')).toHaveProperty('not.opaque')
+    expect(norm('not_member(org_id)')).toHaveProperty('not.opaque')
+  })
+  it('accepts only constant, star and plain column targets', () => {
+    const w = 'FROM memberships m WHERE (m.org_id = projects.org_id)'
+    for (const t of ['count(*)', 'max(m.role)', 'lower(m.role)']) expect(norm(`(EXISTS ( SELECT ${t} ${w}))`), t).toHaveProperty('opaque')
+    for (const t of ['1', '*', 'm.*', 'm.org_id']) expect(norm(`(EXISTS ( SELECT ${t} ${w}))`), t).toEqual(exists('pg:public.memberships?org_id={resource.org_id}'))
+  })
+  it('is opaque for column aliases, ONLY and ambiguous names', () => {
+    expect(norm('(EXISTS ( SELECT 1 FROM memberships m(user_id, org_id) WHERE (m.org_id = projects.org_id)))')).toHaveProperty('opaque')
+    expect(norm('(EXISTS ( SELECT 1 FROM ONLY memberships m WHERE (m.org_id = projects.org_id)))')).toHaveProperty('opaque')
+    const odd: CatalogIndex = { ...catalog, relations: new Map([...catalog.relations, ['public.odd', new Set(['a&b', 'org_id'])]]) }
+    expect(run('(EXISTS ( SELECT 1 FROM odd WHERE ("a&b" = projects.org_id)))', 'resource', odd).expr).toHaveProperty('opaque')
   })
 })
 
@@ -86,5 +109,12 @@ describe('helper functions', () => {
     for (const sql of ['volatile_member(org_id)', 'plpgsql_member(org_id)', 'two_statements(org_id)', 'nosuch(org_id)', 'loop(org_id)', 'is_member(lower(status))']) {
       expect(norm(sql), sql).toHaveProperty('opaque')
     }
+  })
+  it('resolves unqualified names through the search path', () => {
+    expect(norm('app_member(org_id)')).toHaveProperty('opaque') // only public.memberships exists
+    expect(run('app_member(org_id)', 'resource', withApp).expr).toEqual(exists('pg:app.memberships?org_id={resource.org_id}'))
+    expect(norm('empty_path_member(org_id)')).toHaveProperty('opaque')
+    expect(norm('lower(org_id)')).toHaveProperty('opaque') // pg_catalog.lower wins over public.lower
+    expect(norm('public.lower(org_id)')).toEqual({ and: [] })
   })
 })

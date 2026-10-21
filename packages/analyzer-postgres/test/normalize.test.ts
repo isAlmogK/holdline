@@ -14,6 +14,7 @@ const catalog: CatalogIndex = {
     ['auth.users', new Set(['id', 'email'])],
   ]),
   functions: new Map(),
+  builtins: new Set(),
 }
 
 const norm = (sql: string, side: Side = 'resource', supabase = true) =>
