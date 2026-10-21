@@ -3,6 +3,7 @@ import { runChecks } from '../src/check/run.js'
 import { parseFacts } from '../src/facts.js'
 import { addToPending, approve, emptyPending, mute, parsePendingFile, reject, serializePendingFile } from '../src/pending.js'
 import { ProposalError, validateProposals } from '../src/proposals.js'
+import { hashVocabulary } from '../src/hash.js'
 import { emptyRulesFile } from '../src/rules.js'
 
 const facts = parseFacts({
@@ -111,6 +112,34 @@ describe('pending and approval', () => {
     const out = approve(emptyRulesFile(), pending, ['P-2', 'P-2'], { by: 'a', at: 'b' })
     expect(out.file.rules).toHaveLength(1)
     expect(out.approved).toHaveLength(1)
+  })
+  it('approve stamps the vocabulary it moves into the file', () => {
+    const out = approve(emptyRulesFile(), pending, ['P-2'], { by: 'almog', at: '2026-10-21' })
+    const staff = out.file.vocabulary[0]!
+    expect(staff.approved).toEqual({ by: 'almog', at: '2026-10-21', hash: hashVocabulary(staff) })
+  })
+  it('flags edited or unstamped vocabulary, and approve vocabulary:<id> clears it', () => {
+    const { file } = approve(emptyRulesFile(), pending, 'all', { by: 'almog', at: '2026-10-21' })
+    const status = (f: typeof file) => runChecks(facts, f).results.filter(r => r.rule === 'vocabulary:staff')
+    expect(status(file)).toEqual([])
+    const edited = { ...file, vocabulary: file.vocabulary.map(v => ({ ...v, recognize: [{ symbol: 'h:staffOnly' }] })) }
+    expect(status(edited)).toEqual([{
+      rule: 'vocabulary:staff', status: 'unapproved-edit', target: 'vocabulary',
+      message: 'vocabulary staff was changed without approval. Approve it with `holdline approve vocabulary:staff`, or restore it.',
+    }])
+    const handAdded = { ...file, vocabulary: [...file.vocabulary, { id: 'owner', text: 'Caller owns it', expr: { atom: { op: 'authenticated' as const } }, recognize: [] }] }
+    expect(runChecks(facts, handAdded).results.filter(r => r.status === 'unapproved-edit').map(r => r.rule)).toEqual(['vocabulary:owner'])
+    const again = approve(edited, { ...pending, rules: [], vocabulary: [] }, ['vocabulary:staff'], { by: 'almog', at: '2026-10-22' })
+    expect(again.approved).toEqual([{ key: 'vocabulary:staff', id: 'vocabulary:staff' }])
+    expect(status(again.file)).toEqual([])
+    expect(again.file.vocabulary[0]!.approved).toMatchObject({ by: 'almog', at: '2026-10-22' })
+    expect(() => approve(file, pending, ['vocabulary:ghost'], { by: 'a', at: 'b' })).toThrow(/vocabulary:ghost/)
+  })
+  it('rejects proposed or pending vocabulary that carries approval', () => {
+    const r = validateProposals({ vocabulary: [{ ...staffVocab, approved: { by: 'x', at: 'y', hash: 'z' } }], rules: [] }, facts, emptyRulesFile())
+    expect(r.vocabulary.map(v => v.accepted)).toEqual([false])
+    const text = serializePendingFile({ ...pending, vocabulary: [{ ...pending.vocabulary[0]!, approved: { by: 'x', at: 'y', hash: 'z' } } as never] })
+    expect(() => parsePendingFile(text)).toThrow(/approved/)
   })
   it('rejects proposals that carry approval state, and clamps limit', () => {
     const r = validateProposals({ vocabulary: [staffVocab], rules: [{ ...transferRule, status: 'approved' }, { ...transferRule, approved: { by: 'x', at: 'y', hash: 'z' } }] }, facts, emptyRulesFile())

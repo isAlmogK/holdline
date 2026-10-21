@@ -11,13 +11,20 @@ export const RecognizerSchema = z.union([
   z.strictObject({ symbol: z.string().min(1) }),
 ])
 
+const ApprovalSchema = z.strictObject({ by: z.string(), at: z.string(), hash: z.string() })
+
 export const VocabularyEntrySchema = z.strictObject({
   id: SlugSchema,
   text: z.string().min(1),
   expr: ExprSchema,
   recognize: z.array(RecognizerSchema).default([]),
+  approved: ApprovalSchema.optional(),
 })
 export type VocabularyEntry = z.output<typeof VocabularyEntrySchema>
+
+// Proposals and pending entries never carry approval: only `approve` stamps it.
+export const ProposedVocabularySchema = VocabularyEntrySchema.omit({ approved: true })
+export type ProposedVocabulary = z.output<typeof ProposedVocabularySchema>
 
 export const RouteTargetSchema = z.strictObject({ routes: z.string().min(1) })
 export const SymbolTargetSchema = z.strictObject({ symbol: z.string().min(1) })
@@ -34,7 +41,7 @@ const tail = {
   evidence: z.array(z.string()).default([]),
   enforce: z.array(z.enum(ENFORCE)).optional(),
   status: z.enum(['pending', 'approved', 'muted']),
-  approved: z.strictObject({ by: z.string(), at: z.string(), hash: z.string() }).optional(),
+  approved: ApprovalSchema.optional(),
   muted: z.strictObject({ by: z.string(), at: z.string(), reason: z.string().min(1) }).optional(),
 }
 
@@ -135,6 +142,11 @@ export function parseRulesFile(text: string, source = 'holdline.rules'): RulesFi
   if (!parsed.success) throw new RulesFileError(`${source}: ${z.prettifyError(parsed.error)}`)
   const seen = new Set<string>()
   const problems: string[] = []
+  const vocabIds = new Set<string>()
+  for (const v of parsed.data.vocabulary) {
+    if (vocabIds.has(v.id)) problems.push(`duplicate vocabulary id ${v.id}`)
+    vocabIds.add(v.id)
+  }
   for (const rule of parsed.data.rules) {
     if (seen.has(rule.id)) problems.push(`duplicate rule id ${rule.id}`)
     seen.add(rule.id)
@@ -167,7 +179,7 @@ export function effectiveEnforce(rule: Rule): Enforce[] {
   return rule.enforce ?? DEFAULT_ENFORCE[rule.type]
 }
 
-export function vocabularyMap(file: RulesFile, extra: VocabularyEntry[] = []): Map<string, Expr> {
+export function vocabularyMap(file: RulesFile, extra: ProposedVocabulary[] = []): Map<string, Expr> {
   return new Map([...file.vocabulary, ...extra].map(v => [v.id, v.expr]))
 }
 

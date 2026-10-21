@@ -1,6 +1,6 @@
 import { FactIndex } from '../fact-index.js'
 import type { Facts } from '../facts.js'
-import { hashRule } from '../hash.js'
+import { hashRule, hashVocabulary } from '../hash.js'
 import { vocabularyMap, type ProposedRule, type Rule, type RulesFile } from '../rules.js'
 import { describeTarget, type Result } from '../results.js'
 import { checkAccess } from './access.js'
@@ -42,6 +42,14 @@ export function runChecks(
   const ctx: CheckContext = { index: new FactIndex(facts), vocab: vocabularyMap(file) }
   const results: Result[] = []
   const mutedRules: MutedRule[] = []
+  // Unapproved vocabulary edits are never filtered out by `only`: they can change what every rule means.
+  for (const v of file.vocabulary) {
+    if (v.approved && v.approved.hash === hashVocabulary(v)) continue
+    results.push({
+      rule: `vocabulary:${v.id}`, status: 'unapproved-edit', target: 'vocabulary',
+      message: `vocabulary ${v.id} was changed without approval. Approve it with \`holdline approve vocabulary:${v.id}\`, or restore it.`,
+    })
+  }
   for (const rule of file.rules) {
     if (opts.only && !opts.only.includes(rule.id)) continue
     if (rule.status === 'muted') {

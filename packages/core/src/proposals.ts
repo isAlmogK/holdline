@@ -5,12 +5,12 @@ import { FactIndex } from './fact-index.js'
 import type { Facts } from './facts.js'
 import { collectRefs } from './logic.js'
 import {
-  ProposedRuleSchema, VocabularyEntrySchema, validateRuleSemantics, vocabularyMap,
-  type ProposedRule, type Rule, type RulesFile, type VocabularyEntry,
+  ProposedRuleSchema, ProposedVocabularySchema, validateRuleSemantics, vocabularyMap,
+  type ProposedRule, type ProposedVocabulary, type Rule, type RulesFile,
 } from './rules.js'
 
 export const ProposalBatchSchema = z.strictObject({
-  vocabulary: z.array(VocabularyEntrySchema).default([]),
+  vocabulary: z.array(ProposedVocabularySchema).default([]),
   rules: z.array(ProposedRuleSchema).default([]),
 })
 
@@ -18,7 +18,7 @@ export class ProposalError extends Error {}
 
 export type Classification = 'holds' | 'broken' | 'rejected'
 export type RuleOutcome = { classification: Classification; rule?: ProposedRule; raw: unknown; reason?: string; violations?: string[] }
-export type VocabularyOutcome = { accepted: boolean; entry?: VocabularyEntry; raw: unknown; reason?: string }
+export type VocabularyOutcome = { accepted: boolean; entry?: ProposedVocabulary; raw: unknown; reason?: string }
 export type ProposalReport = { rules: RuleOutcome[]; vocabulary: VocabularyOutcome[]; dropped: number }
 
 const RawBatch = z.object({ vocabulary: z.array(z.unknown()).default([]), rules: z.array(z.unknown()).default([]) })
@@ -35,7 +35,7 @@ export function validateProposals(input: unknown, facts: Facts, file: RulesFile,
 
   const knownVocab = new Set(file.vocabulary.map(v => v.id))
   const vocabulary: VocabularyOutcome[] = batch.data.vocabulary.map(raw => {
-    const parsed = VocabularyEntrySchema.safeParse(raw)
+    const parsed = ProposedVocabularySchema.safeParse(raw)
     if (!parsed.success) return { accepted: false, raw, reason: z.prettifyError(parsed.error) }
     if (knownVocab.has(parsed.data.id)) return { accepted: false, raw, entry: parsed.data, reason: `vocabulary id ${parsed.data.id} already exists` }
     knownVocab.add(parsed.data.id)

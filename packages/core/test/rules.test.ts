@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hashRule } from '../src/hash.js'
+import { hashRule, hashVocabulary } from '../src/hash.js'
 import {
   RuleSchema, RulesFileError, emptyRulesFile, nextRuleId, parseRulesFile, serializeRulesFile,
   validateRuleSemantics, vocabularyMap, effectiveEnforce,
@@ -64,6 +64,14 @@ describe('parseRulesFile', () => {
     expect(() => parseRulesFile(blockNotMuted)).toThrow('R-002: a muted block needs status: muted')
     const ok = yamlText.replace('columns: [team_id]\n    status: approved', 'columns: [team_id]\n    status: muted\n    muted: { by: a, at: "2026-10-21", reason: noisy }')
     expect(parseRulesFile(ok).rules[1]!.status).toBe('muted')
+  })
+  it('rejects duplicate vocabulary ids', () => {
+    const dup = yamlText.replace('rules:\n', `  - id: account-member\n    text: Again\n    expr: { atom: { op: authenticated } }\nrules:\n`)
+    expect(() => parseRulesFile(dup)).toThrow('duplicate vocabulary id account-member')
+  })
+  it('accepts an approval stamp on vocabulary entries', () => {
+    const stamped = yamlText.replace('      - firestore-function: isAccountMember\n', '      - firestore-function: isAccountMember\n    approved: { by: almog, at: "2026-10-21", hash: abc }\n')
+    expect(parseRulesFile(stamped).vocabulary[0]!.approved).toEqual({ by: 'almog', at: '2026-10-21', hash: 'abc' })
   })
   it('rejects invariants missing their kind-specific fields', () => {
     const bad = yamlText.replace('kind: not-null', 'kind: fk')
@@ -150,6 +158,22 @@ describe('hashRule', () => {
     const r = RuleSchema.parse({ ...dataRule, requires: { ref: 'no-such-predicate' } })
     expect(hashRule(r, vocab)).toMatch(/^[0-9a-f]{12}$/)
     expect(hashRule(r, vocab)).toBe(hashRule(r, vocab))
+  })
+})
+
+describe('hashVocabulary', () => {
+  const entry = parseRulesFile(yamlText).vocabulary[0]!
+  it('is 12 hex chars over id, text, expr and recognize, ignoring approval', () => {
+    expect(hashVocabulary(entry)).toMatch(/^[0-9a-f]{12}$/)
+    expect(hashVocabulary({ ...entry, approved: { by: 'x', at: 'y', hash: 'z' } })).toBe(hashVocabulary(entry))
+  })
+  it.each([
+    ['id', { id: 'other' }],
+    ['text', { text: 'Someone' }],
+    ['expr', { expr: { atom: { op: 'authenticated' as const } } }],
+    ['recognize', { recognize: [{ 'firestore-function': 'isAdmin' }] }],
+  ])('changes when %s changes', (_field, patch) => {
+    expect(hashVocabulary({ ...entry, ...patch })).not.toBe(hashVocabulary(entry))
   })
 })
 

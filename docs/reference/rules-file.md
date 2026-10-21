@@ -22,7 +22,7 @@ rules:                 # optional, default []
 ```
 
 `parseRulesFile(text)` throws `RulesFileError` on invalid YAML, any schema violation (unknown keys are errors),
-a duplicate rule id, a failed semantic check (see "Invariant" below), a rule with `status: pending`
+a duplicate rule id, a duplicate vocabulary id, a failed semantic check (see "Invariant" below), a rule with `status: pending`
 (`<id>: pending rules belong in .holdline/pending.yaml; approve them with holdline approve`), a rule with
 `status: muted` and no `muted` block, or a `muted` block on a rule whose status is not `muted`. An empty file is an
 empty rules file.
@@ -202,7 +202,7 @@ parse time and, if constructed in code, reported as a violation ("not supported 
 
 | Status | When |
 |---|---|
-| `unapproved-edit` | No `approved` block, or its hash differs from `hashRule(rule, vocab)` |
+| `unapproved-edit` | No `approved` block, or its hash differs from `hashRule(rule, vocab)`. Vocabulary entries get the same check (see "Vocabulary approval") |
 | `unknown` | Error diagnostics make the facts unreliable for the rule: for an `access` rule on a `symbol`, an analyzer crash, missing evidence, or an error in its symbol's or evidence's files; for every other rule, any error diagnostic. See facts.md "Diagnostics and unknown" |
 | `stale` | The target is not in the facts |
 | `violation` | One result per failing item |
@@ -223,6 +223,7 @@ A vocabulary entry names a condition once so rules can say `{ ref: <id> }`.
 | `text` | string | Plain language |
 | `expr` | Expr | May itself contain `ref`s |
 | `recognize` | list, default `[]` | `{ firestore-function: "<name>" }` or `{ symbol: "<id>" }` |
+| `approved` | `{ by, at, hash }`, optional | Written by `approve`; never by hand. Not allowed in proposals or `.holdline/pending.yaml` |
 
 `recognize` tells an analyzer which function or symbol means this predicate, so it emits `{ ref: <id> }` instead
 of `opaque`. Core only stores and validates the field; the analyzers act on it.
@@ -230,7 +231,25 @@ of `opaque`. Core only stores and validates the field; the analyzers act on it.
 Expansion: `expand` replaces each `ref` with the entry's `expr`, recursively. An unknown id becomes
 `opaque "unknown predicate ..."`, and a cycle becomes `opaque "circular predicate ..."`; an `opaque` never
 satisfies a requirement. Rules referring to a vocabulary id that is not in the file therefore fail rather than pass.
-`vocabularyMap(file, extra)` builds the lookup (extras win on id collisions).
+`vocabularyMap(file, extra)` builds the lookup (extras win on id collisions). Vocabulary ids are unique in a file.
+
+### Vocabulary approval
+
+`hashVocabulary(entry)` is the first 12 hex characters of the SHA-256 of `canonicalJson({ id, text, expr, recognize })`.
+`recognize` is hashed because it changes what analyzers emit.
+
+For each vocabulary entry with no `approved` block, or whose `approved.hash` differs from `hashVocabulary(entry)`,
+`runChecks` emits one result before the rule results (the `only` filter does not hide it):
+
+```json
+{ "rule": "vocabulary:<id>", "status": "unapproved-edit", "target": "vocabulary",
+  "message": "vocabulary <id> was changed without approval. Approve it with `holdline approve vocabulary:<id>`, or restore it." }
+```
+
+It counts like a rule in the summary and makes `check` exit 1. The agent format tells the agent to undo the change
+(only the user approves). Editing `expr` also changes the hash of every rule that uses the entry, so those rules are
+`unapproved-edit` too until re-approved. `approve` stamps every entry it moves from pending into the file, and
+`holdline approve vocabulary:<id>` restamps an edited entry.
 
 ## Approval hashes
 
@@ -245,7 +264,8 @@ undefined dropped) of the parsed rule, excluding `id`, `status`, `approved`, `mu
 | Not hashed | `id`, `status`, `approved`, `muted`, `evidence`, so approving, muting and changing evidence never invalidate a rule |
 
 Never edit `approved.hash` by hand. After editing `holdline.rules` text in a fixture, run
-`pnpm tsx scripts/approve-fixture.ts <rules.yaml>`.
+`pnpm tsx scripts/approve-fixture.ts <rules.yaml>`. It restamps every approved rule and every vocabulary entry that
+has an `approved` block.
 
 ## Muting
 
@@ -265,7 +285,8 @@ removes `muted`. `reason` is required.
 ## Proposals and pending rules
 
 Inference is done by the user's agent. It submits `{ vocabulary: [...], rules: [...] }`; proposed rules are the
-rule schemas without `id`, `status`, `approved` and `muted`.
+rule schemas without `id`, `status`, `approved` and `muted`, and proposed vocabulary entries are
+`ProposedVocabularySchema` (the entry schema without `approved`). Pending vocabulary uses the same schema.
 
 `validateProposals(input, facts, file, { limit })` returns `{ rules, vocabulary, dropped }`.
 
@@ -303,8 +324,9 @@ along with newly accepted vocabulary. Not added, and reported as `conflicts`:
 |---|---|
 | New rule | Gets the next `R-nnn`, `status: approved`, and `approved: { by, at, hash }` where the hash is computed against the approved vocabulary plus the pending vocabulary |
 | Existing rule id | Restamps `approved` with a fresh hash (this is how an `unapproved-edit` is accepted), clears `muted` |
-| Vocabulary | `'all'` moves all pending vocabulary into the file. Specific keys move only the entries the approved rules use, transitively. The rest stay pending |
-| Errors | An unknown key; a pending vocabulary id that is already approved |
+| Vocabulary | `'all'` moves all pending vocabulary into the file. Specific keys move only the entries the approved rules use, transitively. The rest stay pending. Every moved entry is stamped `approved: { by, at, hash: hashVocabulary(entry) }` |
+| `vocabulary:<id>` key | Restamps that approved vocabulary entry (how an edited entry is accepted). Reported as `vocabulary:<id> re-approved` |
+| Errors | An unknown key (including `vocabulary:<id>` for an id not in the file); a pending vocabulary id that is already approved |
 | Pending after | Approved keys are removed |
 
 ## Test cases (`.holdline/tests/<rule id>.yaml`)
