@@ -1,6 +1,7 @@
 import { FALSE, TRUE, type Expr } from '@holdline/core'
 import type { Node } from './ast.js'
 import { compareValues } from './compare.js'
+import { inlineCall } from './inline.js'
 import { lookupArg, lookupPath } from './lookup-path.js'
 import type { Env } from './scope.js'
 import { resolveValue, type NormalizeContext, type Value } from './value.js'
@@ -73,9 +74,21 @@ export function normalizeCondition(node: Node, env: Env, ctx: NormalizeContext):
       const r = resolveValue(node.right, env, ctx)
       return authCheck(node, l, r) ?? compareValues(node.op, l, r) ?? opaque(node, ctx)
     }
+    case 'ident': {
+      // A param or let: the expression it is bound to, read as a condition in the env it was written in.
+      const binding = env.bindings.get(node.name)
+      if (binding) return normalizeCondition(binding.node, binding.env, ctx)
+      break
+    }
     case 'call': {
       const arg = lookupArg(node, 'exists', env, ctx)
-      if (!arg) break
+      if (!arg) {
+        const fn = inlineCall(node, env, ctx)
+        if (fn.kind === 'ref') return { ref: fn.id }
+        if (fn.kind === 'inline') return normalizeCondition(fn.node, fn.env, ctx)
+        if (fn.kind === 'too-deep') return opaque(node, ctx)
+        break
+      }
       const p = lookupPath(arg, env, ctx)
       if (!p) return opaque(node, ctx)
       const atom: Expr = { atom: { op: 'exists', doc: p.path } }

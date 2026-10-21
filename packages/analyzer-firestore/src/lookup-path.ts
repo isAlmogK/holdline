@@ -68,7 +68,11 @@ export function lookupPath(node: Node, env: Env, ctx: NormalizeContext): { path:
 export function lookupArg(call: Call, name: 'get' | 'exists', env: Env, ctx: NormalizeContext): Node | undefined {
   const { callee, args } = call
   if (args.length !== 1) return undefined
-  if (ctx.store === 'firestore') return callee.type === 'ident' && callee.name === name ? args[0] : undefined
+  if (ctx.store === 'firestore') {
+    // A user function of the same name: which one Firestore calls is not modelled, so the call stays opaque.
+    if (callee.type !== 'ident' || callee.name !== name || env.scope.findFunction(name)) return undefined
+    return args[0]
+  }
   if (callee.type !== 'member' || callee.property !== name) return undefined
   const object = resolveValue(callee.object, env, ctx)
   return object?.kind === 'object' && object.name === 'firestore' ? args[0] : undefined

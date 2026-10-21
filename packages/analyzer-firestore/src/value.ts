@@ -1,5 +1,6 @@
 import { OPERAND_PATTERN, type Literal } from '@holdline/core'
 import type { Node } from './ast.js'
+import { inlineCall } from './inline.js'
 import { lookupArg, lookupPath } from './lookup-path.js'
 import type { Env } from './scope.js'
 
@@ -66,8 +67,9 @@ function stringLiteral(node: Node, env: Env, ctx: NormalizeContext): string | un
 }
 
 /**
- * The built-in `get(P)` (Storage: `firestore.get(P)`) gives a `doc`; `x.get('f', d)` on a map or a
- * fallback-free operand, with a literal `d`, gives a field with a fallback. Other calls are not values yet.
+ * The built-in `get(P)` (Storage: `firestore.get(P)`) gives a `doc`; a user function gives its inlined
+ * return value; `x.get('f', d)` on a map or a fallback-free operand, with a literal `d`, gives a field with a
+ * fallback. Other calls are not values.
  */
 function resolveCall(node: Extract<Node, { type: 'call' }>, env: Env, ctx: NormalizeContext): Value | undefined {
   const lookup = lookupArg(node, 'get', env, ctx)
@@ -76,6 +78,10 @@ function resolveCall(node: Extract<Node, { type: 'call' }>, env: Env, ctx: Norma
     return p && { kind: 'doc', path: p.path, auth: p.auth }
   }
   const { callee, args } = node
+  if (callee.type === 'ident') {
+    const fn = inlineCall(node, env, ctx, 'value')
+    return fn.kind === 'inline' ? resolveValue(fn.node, fn.env, ctx) : undefined
+  }
   if (callee.type !== 'member' || callee.property !== 'get' || args.length !== 2) return undefined
   const x = resolveValue(callee.object, env, ctx)
   if (!x || !(x.kind === 'map' || (x.kind === 'operand' && !x.fallback))) return undefined
