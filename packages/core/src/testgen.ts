@@ -1,3 +1,4 @@
+import { canonicalJson, deepEqual } from './canonical.js'
 import type { Atom, Operand } from './expr.js'
 import { formatAtom } from './format.js'
 import { hashRule } from './hash.js'
@@ -25,7 +26,8 @@ export function generateTests(rule: Rule, vocab: Vocabulary): TestFile | undefin
   if (!parts.every((p): p is { atom: Atom } => 'atom' in p)) {
     return { ...base, skipped: ['the requirement must be only "and" of atoms to generate cases; check it statically'] }
   }
-  const atoms = parts.map(p => p.atom)
+  const atoms = parts.map(p => p.atom).filter((a, i, all) => all.findIndex(b => deepEqual(a, b)) === i)
+  const readsRecord = atoms.some(a => canonicalJson(a).includes('resource.'))
   try {
     const satisfied = satisfy(atoms, rule)
     for (const op of rule.ops) {
@@ -33,9 +35,13 @@ export function generateTests(rule: Rule, vocab: Vocabulary): TestFile | undefin
         base.skipped.push('list: needs query filters to test; read cases cover the condition')
         continue
       }
-      base.cases.push(toCase(`${op}: allowed when every condition holds`, satisfied, rule, op, 'allow'))
+      if (op === 'create' && readsRecord) {
+        base.skipped.push('create: the condition reads the stored record, which does not exist on create')
+        continue
+      }
+      base.cases.push(toCase(`${op}: allowed when every condition holds`, satisfied, satisfied, rule, op, 'allow'))
       atoms.forEach((a, i) => {
-        base.cases.push(toCase(`${op}: denied without ${formatAtom(a)}`, breakAtom(atoms, i, rule), rule, op, 'deny'))
+        base.cases.push(toCase(`${op}: denied without ${formatAtom(a)}`, breakAtom(atoms, i, rule), satisfied, rule, op, 'deny'))
       })
     }
   } catch (e) {
@@ -90,13 +96,13 @@ function breakAtom(atoms: Atom[], index: number, rule: DataAccessRule): World {
   const w = satisfy(atoms, rule)
   switch (a.op) {
     case 'authenticated': w.actor = null; break
-    case 'isNull': set(w, a.operand, 'not-null'); break
-    case 'in': set(w, a.left, 'not-allowed'); break
+    case 'isNull': set(w, a.operand, 'not-null', true); break
+    case 'in': set(w, a.left, 'not-allowed', true); break
     case 'eq': {
       // Prefer breaking the stored or incoming record; fall back to the actor's claims or role.
       const sides = [a.left, a.right]
       const side = sides.find(o => typeof o === 'string' && /^(resource|incoming)\./.test(o)) ?? sides.find(settable)
-      if (side) set(w, side, 'other-value')
+      if (side) set(w, side, 'other-value', true)
       else if (w.actor) w.actor.uid = 'user-2'
       break
     }
@@ -104,11 +110,11 @@ function breakAtom(atoms: Atom[], index: number, rule: DataAccessRule): World {
   return w
 }
 
-function toCase(name: string, w: World, rule: DataAccessRule, op: Op, expect: 'allow' | 'deny'): TestCase {
+function toCase(name: string, w: World, dataWorld: World, rule: DataAccessRule, op: Op, expect: 'allow' | 'deny'): TestCase {
   const path = rule.target.store === 'postgres' ? storePath(rule) : concretize(targetPath(rule), p => w.params[p] ?? `${p}-1`)
-  const record = { ...w.resource }
-  const seed = [...(op === 'create' ? [] : [{ path: storePath(rule), data: record }]), ...w.docs]
-  const data = op === 'create' || op === 'update' ? { ...record, ...w.incoming } : undefined
+  const record = structuredClone(w.resource)
+  const seed = structuredClone([...(op === 'create' ? [] : [{ path: storePath(rule), data: record }]), ...w.docs])
+  const data = op === 'create' || op === 'update' ? structuredClone({ ...dataWorld.resource, ...dataWorld.incoming }) : undefined
   const listPath = path.split('/').slice(0, -1).join('/')
   return {
     name,
@@ -138,17 +144,30 @@ function read(w: World, o: Operand): { fixed: boolean; value: unknown } {
   return { fixed: false, value: undefined }
 }
 
-function set(w: World, o: Operand, value: unknown): void {
-  if (typeof o !== 'string') return
-  if (o.startsWith('resource.')) w.resource[o.slice(9)] = value
-  else if (o.startsWith('incoming.')) w.incoming[o.slice(9)] = value
-  else if (o.startsWith('actor.claim.') && w.actor) w.actor.claims[o.slice(12)] = value
-  else if (o === 'actor.role' && w.actor) w.actor.role = String(value)
-  else throw new Unsupported(`cannot set ${o} to ${JSON.stringify(value)}`)
+function assign(target: Record<string, unknown>, key: string, o: string, value: unknown, force: boolean): void {
+  if (key.includes('.')) throw new Unsupported(`nested field ${o} is not generated yet; check it statically`)
+  if (!force && key in target && !deepEqual(target[key], value)) throw new Unsupported(`conflicting conditions on ${o}; check them statically`)
+  target[key] = value
+}
+
+function set(w: World, o: Operand, value: unknown, force = false): void {
+  if (typeof o !== 'string') throw new Unsupported(`cannot set a literal to ${JSON.stringify(value)}`)
+  if (o.startsWith('resource.')) assign(w.resource, o.slice(9), o, value, force)
+  else if (o.startsWith('incoming.')) assign(w.incoming, o.slice(9), o, value, force)
+  else if (o.startsWith('actor.claim.') && w.actor) assign(w.actor.claims, o.slice(12), o, value, force)
+  else if (o === 'actor.role' && w.actor) {
+    if (!force && w.actor.role !== undefined && w.actor.role !== String(value)) throw new Unsupported(`conflicting conditions on ${o}; check them statically`)
+    w.actor.role = String(value)
+  } else throw new Unsupported(`cannot set ${o} to ${JSON.stringify(value)}`)
 }
 
 function resolveDoc(w: World, doc: string): { path: string; data: Record<string, unknown> } {
-  const fill = (operand: string) => String(read(w, operand).fixed ? read(w, operand).value : valueOf(w, operand))
+  const fill = (operand: string) => {
+    const r = read(w, operand)
+    const v = r.fixed ? r.value : valueOf(w, operand)
+    if (v === undefined) throw new Unsupported(`cannot resolve {${operand}}`)
+    return String(v)
+  }
   if (doc.startsWith('pg:')) {
     const [table, query = ''] = doc.slice(3).split('?')
     const data: Record<string, unknown> = {}
@@ -162,6 +181,8 @@ function resolveDoc(w: World, doc: string): { path: string; data: Record<string,
 }
 
 function valueOf(w: World, operand: string): unknown {
+  const depth = operand.startsWith('actor.claim.') ? 3 : 2
+  if (operand.split('.').length > depth) throw new Unsupported(`nested field ${operand} is not generated yet; check it statically`)
   if (operand.startsWith('resource.')) return w.resource[operand.slice(9)]
   if (operand.startsWith('incoming.')) return w.incoming[operand.slice(9)]
   if (operand.startsWith('actor.claim.')) return w.actor?.claims[operand.slice(12)]

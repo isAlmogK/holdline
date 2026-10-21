@@ -99,3 +99,65 @@ describe('generateTests limits', () => {
     expect(generateTests(rule({ type: 'access', target: { routes: 'GET /a' }, requires: { atom: { op: 'authenticated' } } }), vocab)).toBeUndefined()
   })
 })
+
+describe('generateTests fails loudly instead of guessing', () => {
+  const fs = (requires: unknown, ops: string[] = ['read']) =>
+    rule({ type: 'data-access', target: { store: 'firestore', path: '/dogs/{dogId}' }, ops, requires })
+  const skippedOnly = (r: ReturnType<typeof rule>) => {
+    const f = generateTests(r, vocab)!
+    expect(f.cases).toEqual([])
+    expect(f.skipped.length).toBeGreaterThan(0)
+  }
+
+  it('skips literal and actor.uid targets', () => {
+    skippedOnly(fs({ atom: { op: 'eq', left: 'actor.uid', right: { literal: 'admin' } } }))
+  })
+  it('skips exists placeholders nothing sets', () => {
+    skippedOnly(rule({
+      type: 'data-access',
+      target: { store: 'postgres', table: 'dogs' },
+      ops: ['read'],
+      requires: { atom: { op: 'exists', doc: 'pg:public.m?o={resource.owner}' } },
+    }))
+  })
+  it('serializes without YAML anchors', () => {
+    const f = generateTests(fs({ atom: { op: 'exists', doc: '/m/{actor.uid}' } }, ['read', 'update', 'delete']), vocab)!
+    const text = serializeTestFile(f)
+    expect(text).not.toMatch(/[&*][a-z0-9]/i)
+    expect(parseTestFile(text)).toEqual(f)
+  })
+  it('skips conflicting atoms', () => {
+    skippedOnly(rule({
+      type: 'data-access',
+      target: { store: 'postgres', table: 'dogs' },
+      ops: ['read'],
+      requires: { and: [
+        { atom: { op: 'eq', left: 'actor.claim.t', right: 'resource.t' } },
+        { atom: { op: 'eq', left: 'resource.t', right: { literal: 'a' } } },
+      ] },
+    }))
+    skippedOnly(fs({ and: [
+      { atom: { op: 'isNull', operand: 'resource.x' } },
+      { atom: { op: 'eq', left: 'resource.x', right: { literal: 'a' } } },
+    ] }))
+  })
+  it('dedupes duplicate atoms', () => {
+    const member = { atom: { op: 'exists', doc: '/m/{actor.uid}' } }
+    const f = generateTests(fs({ and: [member, member] }, ['read', 'delete']), vocab)!
+    expect(f.cases.map(c => c.expect)).toEqual(['allow', 'deny', 'allow', 'deny'])
+  })
+  it('skips nested fields', () => {
+    skippedOnly(fs({ atom: { op: 'isNull', operand: 'resource.owner.id' } }))
+  })
+  it('skips create when the condition reads the stored record', () => {
+    const f = generateTests(fs({ atom: { op: 'isNull', operand: 'resource.deletedAt' } }, ['create', 'read']), vocab)!
+    expect(f.skipped).toEqual(['create: the condition reads the stored record, which does not exist on create'])
+    expect(f.cases.every(c => c.do.op === 'read')).toBe(true)
+  })
+  it('keeps the satisfied value in update deny data', () => {
+    const f = generateTests(fs({ atom: { op: 'isNull', operand: 'resource.deletedAt' } }, ['update']), vocab)!
+    const deny = f.cases[1]!
+    expect(deny.seed[0]!.data).toEqual({ deletedAt: 'not-null' })
+    expect(deny.do.data).toEqual({ deletedAt: null })
+  })
+})

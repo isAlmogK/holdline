@@ -36,5 +36,5 @@ export function parseTestFile(text: string, source = 'test file'): TestFile {
 }
 
 export function serializeTestFile(file: TestFile): string {
-  return YAML.stringify(file, { lineWidth: 0 })
+  return YAML.stringify(file, { lineWidth: 0, aliasDuplicateObjects: false })
 }
