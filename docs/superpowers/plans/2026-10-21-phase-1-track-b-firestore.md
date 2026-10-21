@@ -1190,6 +1190,10 @@ export function interpret(row: Row, w: World): boolean | 'error'
 // test/helpers/eval-expr.ts
 // Evaluates a Holdline Expr: absent fields are null; atoms with an actor operand, an `{actor.` path,
 // or an unresolvable lookup are false for an anonymous caller; `opaque` returns undefined (unknown).
+// `lt`/`gt` use Firestore ordering for two values of the same orderable type (numbers, strings) and are
+// false otherwise; `in` with an array literal or a list value on the right is membership, with a map value
+// on the right is key membership (Firestore's `in`). The prover matches these atoms by identity only, so
+// any interpretation is consistent with it; this one makes the model agree with Firestore.
 export function evalExpr(e: Expr, w: World, vocab?: ReadonlyMap<string, Expr>): boolean | undefined
 ```
 
