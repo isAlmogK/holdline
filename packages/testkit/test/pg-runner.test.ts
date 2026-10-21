@@ -57,17 +57,47 @@ describe('runPostgresFile (supabase)', () => {
     expect(outcomes(results)).toEqual({ member: 'allow', 'non-member': 'deny', anonymous: 'deny' })
   }, SLOW)
 
-  it('update/delete: owner allowed, other user denied', async () => {
+  // A data-access rule is per op: the UPDATE/DELETE policies are tested without the member-read SELECT policy.
+  it('update/delete: owner allowed without a membership, other user denied', async () => {
     const owned = record({ ...projectRow, owner_id: 'user-1' })
     const update = { op: 'update' as const, path: 'public.projects', data: { title: 'y' } }
+    const touch = { op: 'update' as const, path: 'public.projects' }
     const del = { op: 'delete' as const, path: 'public.projects' }
     const results = await runPostgresFile(db, file([
-      tc('owner updates', { as: actor, seed: [owned, member], do: update, expect: 'allow' }),
-      tc('other updates', { as: other, seed: [owned, member], do: update, expect: 'deny' }),
-      tc('owner deletes', { as: actor, seed: [owned, member], do: del, expect: 'allow' }),
-      tc('other deletes', { as: other, seed: [owned, member], do: del, expect: 'deny' }),
+      tc('owner updates', { as: actor, seed: [owned], do: update, expect: 'allow' }),
+      tc('owner updates nothing', { as: actor, seed: [owned], do: touch, expect: 'allow' }),
+      tc('other updates', { as: other, seed: [owned], do: update, expect: 'deny' }),
+      tc('owner deletes', { as: actor, seed: [owned], do: del, expect: 'allow' }),
+      tc('other deletes', { as: other, seed: [owned], do: del, expect: 'deny' }),
     ]), 'access', 'supabase')
-    expect(outcomes(results)).toEqual({ 'owner updates': 'allow', 'other updates': 'deny', 'owner deletes': 'allow', 'other deletes': 'deny' })
+    expect(outcomes(results)).toEqual({
+      'owner updates': 'allow', 'owner updates nothing': 'allow', 'other updates': 'deny', 'owner deletes': 'allow', 'other deletes': 'deny',
+    })
+  }, SLOW)
+
+  it('update/delete: the record is checked, not any row the actor owns', async () => {
+    const notMine = record({ ...projectRow, owner_id: 'user-2' })
+    const mine = record({ ...projectRow, owner_id: 'user-1' })
+    const results = await runPostgresFile(db, file([
+      tc('update', { as: actor, seed: [notMine, mine], do: { op: 'update', path: 'public.projects', data: { title: 'y' } }, expect: 'deny' }),
+      tc('delete', { as: actor, seed: [notMine, mine], do: { op: 'delete', path: 'public.projects' }, expect: 'deny' }),
+    ]), 'access', 'supabase')
+    expect(outcomes(results)).toEqual({ update: 'deny', delete: 'deny' })
+  }, SLOW)
+
+  it('PGlite: RESET ROLE leaves SET LOCAL ROLE, and an identical update moves the ctid', async () => {
+    await db.transaction(async tx => {
+      await tx.exec(`insert into public.orgs (id, name) values ('11111111-1111-4111-8111-111111111111', 'a')`)
+      const ctid = async () => (await tx.query<{ c: string }>(`select ctid::text as c from public.orgs`)).rows[0]!.c
+      const before = await ctid()
+      await tx.exec('set local role authenticated')
+      expect((await tx.query<{ u: string }>('select current_user as u')).rows[0]!.u).toBe('authenticated')
+      await tx.query(`update public.orgs set name = $1`, ['a'])
+      await tx.exec('reset role')
+      expect((await tx.query<{ u: string }>('select current_user as u')).rows[0]!.u).toBe('postgres')
+      expect(await ctid()).not.toBe(before)
+      await tx.rollback()
+    })
   }, SLOW)
 
   it('create: allowed for own owner_id, RLS violation is deny', async () => {
