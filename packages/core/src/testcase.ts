@@ -8,7 +8,13 @@ export const ActorSchema = z.strictObject({
   claims: z.record(z.string(), z.unknown()).default({}),
 })
 
-export const SeedSchema = z.strictObject({ path: z.string(), data: z.record(z.string(), z.unknown()) })
+// `store` is set only in storage test files: the object under test is `storage`, every other seed is a
+// Firestore document (`exists` and lookups in Storage rules read Firestore). Unset elsewhere.
+export const SeedSchema = z.strictObject({
+  path: z.string(),
+  store: z.enum(['postgres', 'firestore', 'storage']).optional(),
+  data: z.record(z.string(), z.unknown()),
+})
 
 export const TestCaseSchema = z.strictObject({
   name: z.string(),

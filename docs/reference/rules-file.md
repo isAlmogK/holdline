@@ -378,7 +378,7 @@ skipped: []                              # why cases were not generated
 |---|---|
 | `rule`, `generatedFrom`, `store` | `store` is `postgres`, `firestore` or `storage` |
 | `cases[].as` | `{ uid, role?, claims }` or `null` for an anonymous caller |
-| `cases[].seed` | Records to exist first: `{ path, data }`. Postgres paths are `schema.table` and `data` is the row |
+| `cases[].seed` | Records to exist first: `{ path, store?, data }`. Postgres paths are `schema.table` and `data` is the row. `store` (`postgres`, `firestore` or `storage`) is set only in `storage` files: `storage` on the object under test, `firestore` on every other seed (the `exists` and lookup documents Storage rules read through `firestore.get`/`firestore.exists`). Firestore and Postgres files leave it unset |
 | `cases[].do` | `{ op, path, data? }`. `data` is present for `create` and `update` |
 | `cases[].expect` | `allow`, `deny`, or `reject`. `reject` means a write the database must refuse (for `invariant` cases, such as inserting a null into a `not-null` column). `generateTests` does not produce `reject` cases yet; that lands in Phase 1 |
 | `skipped` | Human readable reasons |

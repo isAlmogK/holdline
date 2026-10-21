@@ -480,3 +480,44 @@ describe('exists keyed on a record field nothing else sets', () => {
     onlyMissing(f, 'update', '/orgs/value-1')
   })
 })
+
+describe('seed stores in storage test files', () => {
+  const f = generateTests(rule({
+    type: 'data-access',
+    target: { store: 'storage', path: '/orgs/{orgId}/files/{fileId}' },
+    ops: ['read'],
+    requires: { atom: { op: 'exists', doc: '/orgs/{param.orgId}/members/{actor.uid}' } },
+  }), vocab)!
+
+  it('marks the object as storage and the looked-up docs as firestore', () => {
+    expect(f.cases[0]!.seed).toEqual([
+      { path: '/orgs/orgId-1/files/fileId-1', store: 'storage', data: {} },
+      { path: '/orgs/orgId-1/members/user-1', store: 'firestore', data: {} },
+    ])
+    expect(f.cases[1]!.seed).toEqual([{ path: '/orgs/orgId-1/files/fileId-1', store: 'storage', data: {} }])
+  })
+  it('keeps the store through YAML', () => {
+    expect(serializeTestFile(f)).toContain('store: firestore')
+    expect(parseTestFile(serializeTestFile(f))).toEqual(f)
+  })
+  it('leaves the store unset in firestore and postgres files', () => {
+    const fsFile = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'firestore', path: '/orgs/{orgId}/files/{fileId}' },
+      ops: ['read'],
+      requires: { atom: { op: 'exists', doc: '/orgs/{param.orgId}/members/{actor.uid}' } },
+    }), vocab)!
+    const pgFile = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'postgres', table: 'files' },
+      ops: ['read'],
+      requires: { atom: { op: 'exists', doc: 'pg:public.members?user_id={actor.uid}' } },
+    }), vocab)!
+    for (const c of [...fsFile.cases, ...pgFile.cases]) for (const s of c.seed) expect('store' in s).toBe(false)
+  })
+  it('rejects an unknown seed store', () => {
+    const text = 'rule: R-001\ngeneratedFrom: x\nstore: storage\ncases:\n  - name: n\n    as: null\n    seed: [{ path: /a, store: s3, data: {} }]\n    do: { op: read, path: /a }\n    expect: deny\n'
+    expect(() => parseTestFile(text)).toThrow()
+    expect(parseTestFile(text.replace('s3', 'storage')).cases[0]!.seed[0]!.store).toBe('storage')
+  })
+})

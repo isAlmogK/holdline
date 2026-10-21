@@ -67,7 +67,11 @@ function toCase(name: string, w: World, dataWorld: World, rule: DataAccessRule, 
   return {
     name,
     as: w.actor ? { ...w.actor, claims: { ...w.actor.claims } } : null,
-    seed: rule.target.store === 'postgres' ? seed : seed.map(s => (s.path === storePath(rule) ? { ...s, path } : s)),
+    seed: rule.target.store === 'postgres' ? seed : seed.map(s => {
+      const own = s.path === storePath(rule)
+      const store = rule.target.store === 'storage' ? { store: own ? 'storage' as const : 'firestore' as const } : {}
+      return { path: own ? path : s.path, ...store, data: s.data }
+    }),
     do: { op, path: op === 'list' && rule.target.store !== 'postgres' ? listPath : path, ...(data ? { data } : {}) },
     expect,
   }
