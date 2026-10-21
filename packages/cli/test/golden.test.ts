@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { copyFile, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,6 +25,20 @@ describe('golden-ts-postgres', () => {
     expect(out.code).toBe(0)
   })
 
+  it('keeps symbol and table locations true to the source', () => {
+    const facts = JSON.parse(readFileSync(join(golden, 'fixtures/facts.json'), 'utf8'))
+    for (const s of facts.symbols as { id: string; location?: { file: string; line: number } }[]) {
+      if (!s.location) continue
+      const line = readFileSync(join(golden, s.location.file), 'utf8').split('\n')[s.location.line - 1] ?? ''
+      const name = s.id.split('#')[1]!.split('.').pop()!
+      expect(line, s.id).toContain(name)
+    }
+    for (const t of facts.tables as { name: string; location: { file: string; line: number } }[]) {
+      const line = readFileSync(join(golden, t.location.file), 'utf8').split('\n')[t.location.line - 1] ?? ''
+      expect(line, t.name).toContain(`CREATE TABLE "${t.name.split('.').pop()}"`)
+    }
+  })
+
   const breakages = readdirSync(join(golden, 'fixtures/breakages'))
   it('has one breakage per rule', () => {
     expect(breakages.sort()).toEqual(Array.from({ length: 12 }, (_, i) => `R-${String(i + 1).padStart(3, '0')}.json`))
@@ -37,7 +51,10 @@ describe('golden-ts-postgres', () => {
       const facts = JSON.parse(await readFile(join(root, 'facts.json'), 'utf8'))
       await writeFile(join(root, 'facts.json'), JSON.stringify(applyPatch(facts, breakage.patch)))
       const out = await runCli(['check', '--facts', 'facts.json', '--format', 'json'], { cwd: root })
-      const failing = JSON.parse(out.stdout).results.filter((r: { status: string }) => r.status !== 'pass')
+      const parsed = JSON.parse(out.stdout)
+      expect(parsed.summary.pass).toBe(11)
+      expect(parsed.summary.violation).toBe(1)
+      const failing = parsed.results.filter((r: { status: string }) => r.status !== 'pass')
       expect(out.code).toBe(1)
       expect([...new Set(failing.map((r: { rule: string }) => r.rule))]).toEqual([breakage.rule])
       expect(failing.every((r: { status: string }) => r.status === 'violation')).toBe(true)
