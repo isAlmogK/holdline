@@ -1,6 +1,6 @@
 # Holdline Phase 1: Data Layers
 
-**Status:** Draft (2026-10-21)
+**Status:** Step 0 implemented (2026-10-21). Tracks A, B and C are not built yet; see [As built (step 0)](#as-built-step-0).
 
 **Feature:** [Holdline feature and core design](2026-10-21-holdline-design.md) in this repo. This spec covers Phase 1 (spec 2 in the feature spec's table): the Postgres and Firestore/Storage analyzers and the database test runner.
 
@@ -359,3 +359,18 @@ Made while brainstorming on 2026-10-21:
 | SDK-call collection inference moves to Phase 2 | It needs TypeScript parsing; the rules files give every target Phase 1 needs |
 | Breakages become real file patches | The analyzers now read files, so the acceptance test can cover the whole path from source to result |
 | Three parallel tracks after a short shared step | Disjoint files; contract changes land once, first |
+
+## As built (step 0)
+
+Step 0 (section 2) is built. The reference docs ([facts](../../reference/facts.md), [rules file](../../reference/rules-file.md)) describe the code; this list records where it differs from sections 2 and 5.
+
+| Section | As built |
+|---|---|
+| 2.1 Lookup operand | Placeholders inside a lookup path must be valid operands (`{actor.uid}`, `{actor.role}`, `{actor.claim.*}`, `{resource.f}`, `{incoming.f}`, `{param.x}`). A `resource.*` or `incoming.*` field that only a lookup or `exists` path needs gets a fresh test value instead of skipping the rule; placeholders the generator can't make a value for (claims, roles) still skip. |
+| 2.1 / 5 Test generation | Deny cases are built by re-solving every other condition around one pinned value, and a deny case is kept only when exactly its condition is false; otherwise it is skipped with "cannot deny only …". `read`, `list` and `delete` are skipped when a condition reads the incoming write. An `exists` or lookup on the record's own path merges into the record seed, so each path is seeded once. Storage test files mark each seed with `store: storage` or `store: firestore`. The generator is split into `testgen.ts`, `testgen-world.ts`, `testgen-satisfy.ts`, `testgen-deny.ts` and `testgen-eval.ts`. |
+| 2.2 Config | Globs are root-relative, matched against the scanned file list with `matchFiles` (`*`, `**`, `?`); absolute globs and `..` segments are config errors. An empty section (`postgres:` with no body) counts as empty. |
+| 2.2 / 2.3 Analyzer contract | `detect(root, files, config)` receives the config. `AnalyzerContext` also carries `recognizers`: the approved vocabulary entries' recognizers, which analyzers using them must include in their cache key. `holdline scan` and `check` pass the same recognizers. |
+| 2.4 Golden harness | `expectClean` and `expectCaught` hold the gate's assertions, and both require `holdline scan` to exit 0. An app's `breakages/` may contain only `*.patch` files (and `.gitkeep`). The per-app suite is skipped until an app has patches. |
+
+**Known gap, owned by Track C:** in Storage test files, a Firestore document (`exists` or lookup) whose path equals the Storage object's path is merged into the object seed, which makes that allow case wrong. Track C fixes it first: the record merge applies only to Firestore targets.
+
