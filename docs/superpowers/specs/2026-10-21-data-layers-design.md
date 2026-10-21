@@ -30,14 +30,14 @@ Small, sequential, done in this session before the three tracks start. Each is a
 Firestore rules authorize through other documents:
 
 ```
-resource.data.accountId in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountIds
+resource.data.orgId in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.orgIds
 ```
 
 Phase 0 operands can't say "field of another document", so this would become `opaque` and every such rule would fail. Add one operand form:
 
 | Operand | Meaning |
 |---|---|
-| `doc(<path>).<field>` | Field `<field>` of the document at `<path>`. `<path>` uses the same placeholders as `exists` docs: `/users/{actor.uid}`, `/accounts/{param.accountId}/members/{actor.uid}`, `/accounts/{resource.accountId}` |
+| `doc(<path>).<field>` | Field `<field>` of the document at `<path>`. `<path>` uses the same placeholders as `exists` docs: `/users/{actor.uid}`, `/orgs/{param.orgId}/members/{actor.uid}`, `/orgs/{resource.orgId}` |
 
 - `OPERAND_PATTERN` accepts `doc\((/[^()]*)\)\.[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*`.
 - Implication needs no change: two lookup operands are equal when their strings are equal.
@@ -67,7 +67,7 @@ storage:
 
 ### 2.3 Analyzer registration
 
-`packages/cli/src/analyzers.ts` imports each analyzer package and lists it. Each track adds exactly one import and one array entry, so merges are trivial. Analyzer packages depend on `@holdline/core` only.
+`packages/cli/src/analyzers.ts` imports each analyzer package and lists it. Each track adds exactly one import and one array entry, so merges are trivial. Among workspace packages, analyzer packages depend only on `@holdline/core`; they bring their own third-party libraries (PGlite, libpg-query). `packages/testkit` may also depend on `packages/analyzer-postgres` for `applyMigrations`.
 
 ### 2.4 Golden app layout for real breakages
 
@@ -182,7 +182,7 @@ A parse error becomes one error diagnostic with the file, line and message, and 
 ### 4.3 Expand
 
 - **Ops:** `read` → `read`, `list`; `get` → `read`; `write` → `create`, `update`, `delete`. (Holdline's `read` is a single-document get.)
-- **Paths:** nested match paths are concatenated, the Firestore prefix `/databases/{database}/documents` and the Storage prefix `/b/{bucket}/o` are removed, and `{x=**}` stays as is. The result is the policy `target`, for example `/accounts/{accountId}/dogs/{dogId}`.
+- **Paths:** nested match paths are concatenated, the Firestore prefix `/databases/{database}/documents` and the Storage prefix `/b/{bucket}/o` are removed, and `{x=**}` stays as is. The result is the policy `target`, for example `/orgs/{orgId}/projects/{projectId}`.
 - **Policy ids:** `firestore:<target>#<op>@<line>` (`storage:` for Storage), one per allow statement and op. The `allow` line is the policy's evidence.
 - **Match blocks** become `match` symbols with id `firestore:<target>`, located at the `match` line.
 
@@ -206,9 +206,10 @@ Functions are inlined: a call to a user-defined function is replaced by its body
 | `&&`, `\|\|`, `!` | `and`, `or`, `not` |
 | `true`, `false` | `{ and: [] }`, `{ or: [] }` |
 | `a ? b : c` | `or[and[a, b], and[not a, c]]` |
+| `getAfter(P)`, `existsAfter(P)` | `opaque`: never the same lookup as `get(P)`, because they read the document after the write and treating both as one value would be unsound |
 | anything else (`hasAny`, `size()`, string building, `request.time`, `matches`, …) | `opaque` with the source text |
 
-`P'` is the document path with the Firestore prefix removed and `$(…)` replaced by `{operand}` (`$(request.auth.uid)` → `{actor.uid}`, `$(accountId)` → `{param.accountId}`, `$(resource.data.accountId)` → `{resource.accountId}`). A path segment that can't be turned into an operand makes the whole lookup `opaque`.
+`P'` is the document path with the Firestore prefix removed and `$(…)` replaced by `{operand}` (`$(request.auth.uid)` → `{actor.uid}`, `$(orgId)` → `{param.orgId}`, `$(resource.data.orgId)` → `{resource.orgId}`). A path segment that can't be turned into an operand makes the whole lookup `opaque`.
 
 Every condition that uses `request.auth` anywhere is ANDed with `authenticated`, because Firestore denies a request whose condition dereferences a null `request.auth`.
 
@@ -239,6 +240,7 @@ Per test file: a fresh PGlite with the project's migrations applied the same way
 Per case, inside a transaction that is rolled back after the case:
 
 1. **Seed as superuser** with `SET LOCAL session_replication_role = replica` (foreign keys and triggers off, so seeds can be partial). Each seed row is completed with filler values for its other `NOT NULL` columns without defaults, chosen from the column type (`uuid` → a fixed UUID, `text` → `'x'`, numbers → `0`, `bool` → `false`, timestamps → epoch, enums → the first label).
+   **Values:** generated test values are strings (`user-1`, `value-1`, `orgId-1`). The runner maps each generated string deterministically to a value of the column's type: for `uuid` columns a UUID v5 of the string (fixed namespace), for numbers a stable small integer, otherwise the string itself. The same mapping applies to `as.uid` and to the `sub` claim, so `auth.uid()` and the seeded rows agree. Each seed row gets its own primary key: the mapped value of its `id` field when the case sets one, otherwise a UUID v5 of the table name and the seed's position.
 2. **Act as the case's actor:** `SET LOCAL ROLE authenticated` (dialect `supabase`; for `plain`, a role `holdline_actor` created with the table privileges), and `set_config('request.jwt.claims', <json>, true)` with `sub` = `as.uid`, `role` = `as.role ?? 'authenticated'` and the case's claims. `as: null` runs as `anon` (supabase) or as the actor role with no claims.
 3. **Do the operation** on the seeded row, found by its primary key:
 
@@ -299,12 +301,12 @@ Breakages include a policy loosened to `true`, a dropped `ENABLE ROW LEVEL SECUR
 
 ### 6.2 `examples/golden-firebase`
 
-A Firebase app with `firestore.rules`, `storage.rules` and `firebase.json`. Collections: `/users/{uid}` (with `accountIds`), `/accounts/{accountId}/members/{uid}` (with `role`), `/dogs/{dogId}` (flat, with `accountId` and `status`), `/dogs/{dogId}/notes/{noteId}`. Storage: `/accounts/{accountId}/files/{path=**}`. Rules include:
+A Firebase app with `firestore.rules`, `storage.rules` and `firebase.json`. Collections: `/users/{uid}` (with `orgIds`), `/orgs/{orgId}/members/{uid}` (with `role`), `/projects/{projectId}` (flat, with `orgId` and `status`), `/projects/{projectId}/notes/{noteId}`. Storage: `/orgs/{orgId}/files/{path=**}`. Rules include:
 
-- data-access: dogs are read only within the caller's accounts (`in(resource.accountId, doc(/users/{actor.uid}).accountIds)`); dogs are created only into the caller's accounts; only account admins update dogs (`eq(doc(/accounts/{resource.accountId}/members/{actor.uid}).role, 'admin')`); dogs are never deleted by clients (no policy allows it); account files are read only by account members (`exists(/accounts/{param.accountId}/members/{actor.uid})`)
-- invariants: `dogs.accountId` must be present on create; `dogs.status` in (`active`, `retired`)
+- data-access: projects are read only within the caller's organizations (`in(resource.orgId, doc(/users/{actor.uid}).orgIds)`); projects are created only into the caller's organizations; only organization admins update projects (`eq(doc(/orgs/{resource.orgId}/members/{actor.uid}).role, 'admin')`); projects are never deleted by clients (no policy allows it); organization files are read only by members (`exists(/orgs/{param.orgId}/members/{actor.uid})`)
+- invariants: `projects.orgId` must be present on create; `projects.status` in (`active`, `archived`)
 
-Breakages include an `allow read: if request.auth != null` added under `/{document=**}`, a helper function whose membership check is removed, an `allow delete` added, a storage rule that drops the membership `exists`, and an `accountIds` check replaced by a `hasAny`.
+Breakages include an `allow read: if request.auth != null` added under `/{document=**}`, a helper function whose membership check is removed, an `allow delete` added, a storage rule that drops the membership `exists`, and an `orgIds` check replaced by a `hasAny`.
 
 The app is rules only in Phase 1. Cloud Functions and an Expo client join it in Phase 2.
 
