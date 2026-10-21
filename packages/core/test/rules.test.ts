@@ -71,15 +71,56 @@ describe('serializeRulesFile', () => {
 })
 
 describe('hashRule', () => {
-  const rule = parseRulesFile(yamlText).rules[0]!
+  const file = parseRulesFile(yamlText)
+  const vocab = vocabularyMap(file)
+  const dataRule = file.rules[0]!
+  const invariant = file.rules[1]!
   it('ignores id, status, approval, mute and evidence', () => {
-    const same = RuleSchema.parse({ ...rule, id: 'R-999', status: 'pending', approved: undefined, evidence: [] })
-    expect(hashRule(same)).toBe(hashRule(rule))
-    expect(hashRule(rule)).toMatch(/^[0-9a-f]{12}$/)
+    const same = RuleSchema.parse({ ...dataRule, id: 'R-999', status: 'pending', approved: undefined, evidence: [] })
+    expect(hashRule(same, vocab)).toBe(hashRule(dataRule, vocab))
+    expect(hashRule(dataRule, vocab)).toMatch(/^[0-9a-f]{12}$/)
   })
   it('changes when the text or the requirement changes', () => {
-    expect(hashRule(RuleSchema.parse({ ...rule, text: 'Anyone can read dogs' }))).not.toBe(hashRule(rule))
-    expect(hashRule(RuleSchema.parse({ ...rule, ops: ['read'] }))).not.toBe(hashRule(rule))
+    expect(hashRule(RuleSchema.parse({ ...dataRule, text: 'Anyone can read dogs' }), vocab)).not.toBe(hashRule(dataRule, vocab))
+    expect(hashRule(RuleSchema.parse({ ...dataRule, ops: ['read'] }), vocab)).not.toBe(hashRule(dataRule, vocab))
+  })
+  it.each([
+    ['text', { text: 'Anyone can read dogs' }],
+    ['requires', { requires: { atom: { op: 'exists', doc: '/accounts/{param.accountId}/admins/{actor.uid}' } } }],
+    ['target', { target: { store: 'firestore', path: '/accounts/{accountId}/cats/{catId}' } }],
+    ['ops', { ops: ['read'] }],
+    ['enforce', { enforce: ['static'] }],
+  ])('changes when data-access field %s changes', (_field, patch) => {
+    expect(hashRule(RuleSchema.parse({ ...dataRule, ...patch }), vocab)).not.toBe(hashRule(dataRule, vocab))
+  })
+  it.each([
+    ['kind and references', { kind: 'fk', references: { table: 'teams', columns: ['id'] } }],
+    ['columns', { columns: ['owner_id'] }],
+    ['values', { kind: 'enum', values: ['a', 'b'] }],
+    ['expr', { kind: 'check', expr: 'x > 0' }],
+  ])('changes when invariant field %s changes', (_field, patch) => {
+    expect(hashRule(RuleSchema.parse({ ...invariant, ...patch }), vocab)).not.toBe(hashRule(invariant, vocab))
+  })
+  it('does not change when id, status, approval, mute or evidence change', () => {
+    const meta = RuleSchema.parse({
+      ...dataRule,
+      id: 'R-999',
+      status: 'muted',
+      approved: { by: 'x', at: '2026-01-01', hash: 'y' },
+      muted: { by: 'x', at: '2026-01-01', reason: 'noise' },
+      evidence: ['firestore:/other'],
+    })
+    expect(hashRule(meta, vocab)).toBe(hashRule(dataRule, vocab))
+  })
+  it('changes when the vocabulary expr behind a ref changes', () => {
+    const changed = new Map(vocab)
+    changed.set('account-member', { atom: { op: 'exists', doc: '/accounts/{param.accountId}/admins/{actor.uid}' } })
+    expect(hashRule(dataRule, changed)).not.toBe(hashRule(dataRule, vocab))
+  })
+  it('hashes an unknown ref deterministically', () => {
+    const r = RuleSchema.parse({ ...dataRule, requires: { ref: 'no-such-predicate' } })
+    expect(hashRule(r, vocab)).toMatch(/^[0-9a-f]{12}$/)
+    expect(hashRule(r, vocab)).toBe(hashRule(r, vocab))
   })
 })
 
