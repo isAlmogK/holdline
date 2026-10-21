@@ -1,3 +1,235 @@
 version: 1
 vocabulary: []
-rules: []
+rules:
+  - id: R-001
+    text: Users read only the projects of organizations they belong to
+    type: data-access
+    target:
+      store: postgres
+      table: projects
+    ops:
+      - read
+      - list
+    requires:
+      atom:
+        op: exists
+        doc: pg:public.memberships?org_id={resource.org_id}&user_id={actor.uid}
+    evidence:
+      - pg:public.projects
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 8d643b52f716
+  - id: R-002
+    text: Only a project's owner can update it
+    type: data-access
+    target:
+      store: postgres
+      table: projects
+    ops:
+      - update
+    requires:
+      atom:
+        op: eq
+        left: resource.owner_id
+        right: actor.uid
+    evidence:
+      - pg:public.projects
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 38d5e17a2aad
+  - id: R-003
+    text: Projects are created only by members of the project's organization
+    type: data-access
+    target:
+      store: postgres
+      table: projects
+    ops:
+      - create
+    requires:
+      atom:
+        op: exists
+        doc: pg:public.memberships?org_id={incoming.org_id}&user_id={actor.uid}
+    evidence:
+      - pg:public.projects
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 72b62428b377
+  - id: R-004
+    text: Only admins read invoices
+    type: data-access
+    target:
+      store: postgres
+      table: invoices
+    ops:
+      - read
+      - list
+    requires:
+      atom:
+        op: eq
+        left: actor.claim.user_role
+        right:
+          literal: admin
+    evidence:
+      - pg:public.invoices
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 2de757a2be68
+  - id: R-005
+    text: Users read only organizations they belong to
+    type: data-access
+    target:
+      store: postgres
+      table: organizations
+    ops:
+      - read
+      - list
+    requires:
+      atom:
+        op: exists
+        doc: pg:public.memberships?org_id={resource.id}&user_id={actor.uid}
+    evidence:
+      - pg:public.organizations
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: cc3818eba97e
+  - id: R-006
+    text: Deleted projects are never readable
+    type: data-access
+    target:
+      store: postgres
+      table: projects
+    ops:
+      - read
+      - list
+    requires:
+      atom:
+        op: isNull
+        operand: resource.deleted_at
+    evidence:
+      - pg:public.projects
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 0ee2ad138ad5
+  - id: R-007
+    text: Users update only their own profile
+    type: data-access
+    target:
+      store: postgres
+      table: profiles
+    ops:
+      - update
+    requires:
+      atom:
+        op: eq
+        left: resource.id
+        right: actor.uid
+    evidence:
+      - pg:public.profiles
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 58315a6a87fc
+  - id: R-008
+    text: Every project belongs to an organization
+    type: invariant
+    target:
+      store: postgres
+      table: projects
+    kind: not-null
+    columns:
+      - org_id
+    evidence:
+      - pg:public.projects
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 59600e0676c6
+  - id: R-009
+    text: A project's organization must exist
+    type: invariant
+    target:
+      store: postgres
+      table: projects
+    kind: fk
+    columns:
+      - org_id
+    references:
+      table: public.organizations
+      columns:
+        - id
+    evidence:
+      - pg:public.projects
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: cf1eaaf28acd
+  - id: R-010
+    text: A membership role is owner, admin or member
+    type: invariant
+    target:
+      store: postgres
+      table: memberships
+    kind: enum
+    columns:
+      - role
+    values:
+      - owner
+      - admin
+      - member
+    evidence:
+      - pg:public.memberships
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 5da964105c92
+  - id: R-011
+    text: A user is a member of an organization at most once
+    type: invariant
+    target:
+      store: postgres
+      table: memberships
+    kind: unique
+    columns:
+      - org_id
+      - user_id
+    evidence:
+      - pg:public.memberships
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 9461ac43a1f3
+  - id: R-012
+    text: Invoice amounts are positive
+    type: invariant
+    target:
+      store: postgres
+      table: invoices
+    kind: check
+    columns:
+      - amount
+    expr: amount > 0
+    evidence:
+      - pg:public.invoices
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: fd8bc934e7f4
+lastRuleId: 12
