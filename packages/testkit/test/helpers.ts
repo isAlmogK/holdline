@@ -14,3 +14,14 @@ export async function project(files: Record<string, string>): Promise<string> {
 
 // PGlite boots a WASM Postgres per test; allow for parallel-suite load.
 export const SLOW = 30_000
+
+// Shared by every @emulator suite: say once, on stderr (the default reporter hides console output of
+// skipped tests), why the suite is skipped, and skip each test with the reason for verbose and CI reporters.
+type Outcome<T> = { results: T } | { infra: string }
+export function announceSkip(outcome: Outcome<unknown>): void {
+  if ('infra' in outcome) process.stderr.write(`@emulator tests skipped: ${outcome.infra}\n`)
+}
+export function resultsOrSkip<T>(outcome: Outcome<T>, ctx: { skip: (note?: string) => void }): T {
+  if ('infra' in outcome) { ctx.skip(outcome.infra); throw new Error('unreachable') }
+  return outcome.results
+}

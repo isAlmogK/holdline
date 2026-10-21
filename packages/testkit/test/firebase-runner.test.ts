@@ -2,6 +2,7 @@ import type { DataStore, TestCase, TestFile } from '@holdline/core'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { runOnEmulator } from '../src/emulator.js'
 import type { FirebaseInput } from '../src/firebase-runner.js'
+import { announceSkip, resultsOrSkip } from './helpers.js'
 
 const firestoreRules = `rules_version = '2';
 service cloud.firestore {
@@ -93,11 +94,11 @@ const summary = (cases: { name: string; actual: string; passed: boolean }[]) => 
 
 describe('@emulator firebase runner', () => {
   let outcome: Awaited<ReturnType<typeof runOnEmulator>>
-  beforeAll(async () => { outcome = await runOnEmulator(input) }, 240_000)
-  const results = (ctx: { skip: (note?: string) => void }) => {
-    if ('infra' in outcome) { console.warn(`@emulator tests skipped: ${outcome.infra}`); ctx.skip(); throw new Error('unreachable') }
-    return outcome.results
-  }
+  beforeAll(async () => {
+    outcome = await runOnEmulator(input)
+    announceSkip(outcome)
+  }, 240_000)
+  const results = (ctx: { skip: (note?: string) => void }) => resultsOrSkip(outcome, ctx)
 
   it('firestore read: member allowed, non-member denied, anonymous denied', ctx => {
     expect(results(ctx)['project-read']).toEqual([
