@@ -178,3 +178,19 @@ describe('deny cases break only their own atom', () => {
     }
   })
 })
+
+describe('test case contract', () => {
+  it('accepts expect: reject for writes the database must refuse (invariant cases)', () => {
+    const text = `rule: R-009
+generatedFrom: abc
+store: postgres
+cases:
+  - name: "create: rejected without team_id"
+    as: null
+    do: { op: create, path: public.dogs, data: { team_id: null } }
+    expect: reject
+`
+    expect(parseTestFile(text).cases[0]!.expect).toBe('reject')
+    expect(() => parseTestFile(text.replace('expect: reject', 'expect: maybe'))).toThrow()
+  })
+})
