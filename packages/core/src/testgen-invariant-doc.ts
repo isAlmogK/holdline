@@ -1,0 +1,53 @@
+import { FactIndex } from './fact-index.js'
+import type { Atom } from './expr.js'
+import type { Facts } from './facts.js'
+import { expand, flattenAnd } from './logic.js'
+import type { DataAccessRule, InvariantRule } from './rules.js'
+import type { TestCase, TestFile } from './testcase.js'
+import { toCase } from './testgen-case.js'
+import { holds } from './testgen-eval.js'
+import { INVALID_ENUM } from './testgen-invariant.js'
+import { satisfy } from './testgen-satisfy.js'
+import { set, Unsupported, type World } from './testgen-world.js'
+
+// Firestore invariant cases (spec 5.4): `create` against the write rules, allowed with the field valid and
+// denied with it missing (`not-null`) or not in the list (`enum`). The allowed world satisfies one of the
+// target's create policies from the facts, so the case tests the field and not the rest of the condition.
+export function firestoreInvariantCases(rule: InvariantRule, facts: Facts | undefined): Pick<TestFile, 'cases' | 'skipped'> {
+  if (rule.target.store !== 'firestore') throw new Error('firestore invariants only')
+  const target = rule.target
+  const none = { cases: [], skipped: [`create: no create policy for ${target.path} in the facts that cases can be generated for`] }
+  if (!facts || (rule.kind !== 'not-null' && rule.kind !== 'enum')) return none
+  for (const policy of new FactIndex(facts).policies(target, 'create')) {
+    const access: DataAccessRule = { id: rule.id, text: rule.text, type: 'data-access', target, ops: ['create'], requires: policy.condition, evidence: [], status: 'approved' }
+    const world = allowWorld(access, rule)
+    if (!world) continue
+    const cases: TestCase[] = []
+    const allowName = rule.kind === 'enum' ? `create: allowed with a valid ${rule.columns.join(', ')}` : `create: allowed with ${rule.columns.join(', ')} set`
+    cases.push(toCase(allowName, world, world, access, 'create', 'allow'))
+    for (const c of rule.columns) {
+      const denied = structuredClone(world)
+      if (rule.kind === 'enum') denied.incoming[c] = INVALID_ENUM
+      else delete denied.incoming[c]
+      const name = rule.kind === 'enum' ? `create: denied with ${c} '${INVALID_ENUM}'` : `create: denied without ${c}`
+      cases.push(toCase(name, denied, denied, access, 'create', 'deny'))
+    }
+    return { cases, skipped: [] }
+  }
+  return none
+}
+
+function allowWorld(access: DataAccessRule, rule: InvariantRule): World | undefined {
+  const parts = flattenAnd(expand(access.requires, new Map()))
+  if (!parts.every((p): p is { atom: Atom } => 'atom' in p)) return undefined
+  const atoms = parts.map(p => p.atom)
+  const pins = rule.kind === 'enum' ? rule.columns.map(c => ({ operand: `incoming.${c}`, value: rule.values![0] })) : []
+  try {
+    const w = satisfy(atoms, access, { pins })
+    if (rule.kind === 'not-null') for (const c of rule.columns) if (w.incoming[c] === undefined) set(w, `incoming.${c}`, `present-1`)
+    return atoms.every(a => holds(w, a, 'create')) ? w : undefined
+  } catch (e) {
+    if (e instanceof Unsupported) return undefined
+    throw e
+  }
+}

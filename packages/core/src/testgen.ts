@@ -10,6 +10,7 @@ import { toCase } from './testgen-case.js'
 import { denyWorld } from './testgen-deny.js'
 import { holds } from './testgen-eval.js'
 import { postgresInvariantCases } from './testgen-invariant.js'
+import { firestoreInvariantCases } from './testgen-invariant-doc.js'
 import { satisfy } from './testgen-satisfy.js'
 import { Unsupported, type World } from './testgen-world.js'
 
@@ -74,5 +75,5 @@ function invariantTests(rule: InvariantRule, vocab: Vocabulary, facts: Facts | u
   const base = { rule: rule.id, generatedFrom: hashRule(rule, vocab), store: rule.target.store }
   if (rule.target.store === 'storage') return { ...base, cases: [], skipped: ['storage invariants are not generated; check them statically'] }
   if (rule.target.store === 'postgres') return { ...base, ...postgresInvariantCases(rule as InvariantRule & { target: { store: 'postgres' } }, facts) }
-  return { ...base, cases: [], skipped: ['firestore invariants are not generated yet'] }
+  return { ...base, ...firestoreInvariantCases(rule, facts) }
 }

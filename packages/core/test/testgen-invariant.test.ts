@@ -87,3 +87,38 @@ describe('postgres invariant tests', () => {
     expect(generateTests(rule({ type: 'access', target: { routes: 'GET /x' }, requires: { atom: { op: 'authenticated' } } }), vocab, facts)).toBeUndefined()
   })
 })
+
+describe('firestore invariant tests', () => {
+  const condition = { and: [
+    { atom: { op: 'authenticated' } },
+    { atom: { op: 'in', left: 'incoming.orgId', right: 'doc(/users/{actor.uid}).orgIds' } },
+    { atom: { op: 'in', left: 'incoming.status', right: { literal: ['active', 'archived'] } } },
+  ] }
+  const fsFacts = parseFacts({ version: 1, policies: [
+    { id: 'firestore:/projects/{projectId}#create@5', store: 'firestore', target: '/projects/{projectId}', ops: ['create'], condition },
+  ] })
+  const users = { path: '/users/user-1', data: { orgIds: ['value-1'] } }
+
+  it('enum: allowed with a listed value, denied with another', () => {
+    const r = rule({ type: 'invariant', target: { store: 'firestore', path: '/projects/{id}' }, kind: 'enum', columns: ['status'], values: ['active', 'archived'] })
+    const f = generateTests(r, vocab, fsFacts)!
+    expect(f.cases).toEqual([
+      { name: 'create: allowed with a valid status', as: { uid: 'user-1', claims: {} }, seed: [users],
+        do: { op: 'create', path: '/projects/id-1', data: { orgId: 'value-1', status: 'active' } }, expect: 'allow' },
+      { name: "create: denied with status '__holdline_invalid__'", as: { uid: 'user-1', claims: {} }, seed: [users],
+        do: { op: 'create', path: '/projects/id-1', data: { orgId: 'value-1', status: '__holdline_invalid__' } }, expect: 'deny' },
+    ])
+  })
+  it('not-null: denied without the field', () => {
+    const r = rule({ type: 'invariant', target: { store: 'firestore', path: '/projects/{id}' }, kind: 'not-null', columns: ['orgId'] })
+    const f = generateTests(r, vocab, fsFacts)!
+    expect(f.cases.map(c => [c.name, c.do.data, c.expect])).toEqual([
+      ['create: allowed with orgId set', { orgId: 'value-1', status: 'active' }, 'allow'],
+      ['create: denied without orgId', { status: 'active' }, 'deny'],
+    ])
+  })
+  it('skips without a usable create policy', () => {
+    const r = rule({ type: 'invariant', target: { store: 'firestore', path: '/other/{id}' }, kind: 'not-null', columns: ['a'] })
+    expect(generateTests(r, vocab, fsFacts)!.skipped).toEqual(['create: no create policy for /other/{id} in the facts that cases can be generated for'])
+  })
+})
