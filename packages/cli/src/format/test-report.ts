@@ -7,7 +7,11 @@ const indent = (text: string) => text.replace(/\n/g, '\n    ')
 
 export const REGENERATE_HINT = 'allow cases are built from the facts when the file was generated; after changing policies run holdline test --regenerate'
 
-const GENERATED = { missing: 'generated: no test file', changed: 'regenerated: the rule changed' } as const
+const GENERATED = {
+  missing: 'generated: no test file',
+  changed: 'regenerated: the rule changed',
+  refreshed: 'regenerated: --regenerate (the facts changed)',
+} as const
 
 export function summarize(out: TestOutput): { passed: number; failed: number; rules: number } {
   const cases = out.files.flatMap(f => f.cases)

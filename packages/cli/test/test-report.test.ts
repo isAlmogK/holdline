@@ -59,6 +59,11 @@ describe('formatTestReport', () => {
     expect(out).not.toContain('--regenerate')
   })
 
+  it('labels a file --regenerate rebuilt for changed facts', () => {
+    const out = formatTestReport({ files: [{ rule: 'R-001', store: 'postgres', generated: 'refreshed', skipped: [], cases: [{ name: 'a', expect: 'allow', actual: 'allow', passed: true }] }], infrastructure: [] }, 'human')
+    expect(out.split('\n')[0]).toBe('R-001 postgres: 1 passed (regenerated: --regenerate (the facts changed))')
+  })
+
   it('prints only the summary when nothing ran', () => {
     expect(formatTestReport({ files: [], infrastructure: [] }, 'human')).toBe('0 passed, 0 failed in 0 rules\n')
   })

@@ -11,7 +11,7 @@ import type { FileReport } from '@holdline/testkit'
 import { UsageError } from './io.js'
 import { testsDir, writeFileEnsured } from './workspace.js'
 
-export type Selected = { rule: Rule; file: TestFile; generated?: 'missing' | 'changed' }
+export type Selected = { rule: Rule; file: TestFile; generated?: 'missing' | 'changed' | 'refreshed' }
 export type Selection = { tests: Selected[]; notes: FileReport[] }
 export type SelectOptions = { only?: string[]; store?: DataStore; regenerate?: boolean }
 
@@ -51,7 +51,8 @@ async function testFile(root: string, rule: Rule, vocab: Map<string, Expr>, file
   const text = serializeTestFile(fresh)
   if (file && serializeTestFile(file) === text) return { rule, file: fresh }
   await writeFileEnsured(join(testsDir(root), `${rule.id}.yaml`), text)
-  return { rule, file: fresh, generated: file ? 'changed' : 'missing' }
+  // A current hash means only --regenerate rebuilt it: the facts changed, not the rule.
+  return { rule, file: fresh, generated: !file ? 'missing' : current ? 'refreshed' : 'changed' }
 }
 
 // Without --rule: every rule enforced by test. With it: the named rules. --store filters before any generation.

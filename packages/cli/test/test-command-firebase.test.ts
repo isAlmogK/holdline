@@ -72,6 +72,6 @@ describe('@emulator holdline test on firestore and storage', () => {
 
     const green = await runCli(['test', '--regenerate', '--facts', 'facts.json', '--format', 'json', '--rule', 'R-002'], { cwd: root })
     expect(green.code, green.stdout).toBe(0)
-    expect(JSON.parse(green.stdout).files.map((f: { rule: string; generated?: string }) => [f.rule, f.generated])).toEqual([['R-002', 'changed']])
+    expect(JSON.parse(green.stdout).files.map((f: { rule: string; generated?: string }) => [f.rule, f.generated])).toEqual([['R-002', 'refreshed']])
   }, EMULATOR)
 })

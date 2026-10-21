@@ -237,7 +237,8 @@ describe('holdline test on postgres', () => {
     const fixed = await runCli(['test', '--regenerate', '--facts', 'facts.json', '--format', 'json', '--rule', 'R-004'], { cwd: root })
     expect(fixed.code, fixed.stderr).toBe(0)
     const json = JSON.parse(fixed.stdout)
-    expect(json.files.map((f: { rule: string; generated?: string; skipped: string[] }) => [f.rule, f.generated, f.skipped])).toEqual([['R-004', 'changed', []]])
+    // The rule did not change, the facts did: the file is labeled refreshed, not changed.
+    expect(json.files.map((f: { rule: string; generated?: string; skipped: string[] }) => [f.rule, f.generated, f.skipped])).toEqual([['R-004', 'refreshed', []]])
     expect(json.summary).toEqual({ passed: 2, failed: 0, rules: 1 })
     const again = await runCli(['test', '--regenerate', '--facts', 'facts.json', '--format', 'json', '--rule', 'R-004'], { cwd: root })
     expect(JSON.parse(again.stdout).files[0].generated).toBeUndefined()
