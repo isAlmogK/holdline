@@ -29,14 +29,14 @@ export const firestoreAnalyzer: Analyzer = {
   async detect(root, files, config) {
     if (config.firestore?.rules || config.storage?.rules) return true
     const d = await discoverRulesFiles(root, files, config)
-    return d.files.length > 0 || d.warnings.length > 0
+    return d.files.length > 0 || d.errors.length > 0
   },
   async analyze(ctx) {
     const discovery = await discoverRulesFiles(ctx.root, ctx.files, ctx.config)
     const out: Required<Pick<AnalyzerOutput, 'policies' | 'symbols' | 'diagnostics'>> = {
       policies: [],
       symbols: [],
-      diagnostics: discovery.warnings.map((w): Diagnostic => ({ analyzer: ANALYZER_NAME, file: w.file, message: w.message, severity: 'warning' })),
+      diagnostics: discovery.errors.map((e): Diagnostic => ({ analyzer: ANALYZER_NAME, file: e.file, message: e.message, severity: 'error' })),
     }
     for (const file of discovery.files) {
       const part = await analyzeCached(ctx, file)

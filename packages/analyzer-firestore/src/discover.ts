@@ -2,7 +2,8 @@ import { readFile } from 'node:fs/promises'
 import { posix } from 'node:path'
 import { matchFiles, type HoldlineConfig } from '@holdline/core'
 
-export interface Discovery { files: string[]; warnings: { file: string; message: string }[] }
+/** `errors` leave a store's rules incomplete: checks must not treat the found policies as the whole set. */
+export interface Discovery { files: string[]; errors: { file: string; message: string }[] }
 
 const STORES = ['firestore', 'storage'] as const
 type Store = (typeof STORES)[number]
@@ -20,7 +21,7 @@ function rulesPaths(value: unknown): string[] {
 /** Rules files of this repo: config globs, root defaults and `firebase.json` pointers, sorted and deduplicated. */
 export async function discoverRulesFiles(root: string, files: readonly string[], config: HoldlineConfig): Promise<Discovery> {
   const found = new Set<string>()
-  const warnings: Discovery['warnings'] = []
+  const errors: Discovery['errors'] = []
   const fileSet = new Set(files)
   const fromJson: Store[] = []
 
@@ -28,7 +29,7 @@ export async function discoverRulesFiles(root: string, files: readonly string[],
     const globs = config[store]?.rules
     if (globs) {
       const matched = matchFiles(files, globs)
-      if (matched.length === 0) warnings.push({ file: CONFIG_FILE, message: `${store}.rules globs match no file` })
+      if (matched.length === 0) errors.push({ file: CONFIG_FILE, message: `${store}.rules globs match no file` })
       for (const f of matched) found.add(f)
     } else {
       if (fileSet.has(`${store}.rules`)) found.add(`${store}.rules`)
@@ -43,7 +44,7 @@ export async function discoverRulesFiles(root: string, files: readonly string[],
         json = JSON.parse(await readFile(`${root}/${file}`, 'utf8'))
       } catch (e) {
         const message = e instanceof SyntaxError ? `invalid JSON: ${e.message}` : `could not read: ${e instanceof Error ? e.message : String(e)}`
-        warnings.push({ file, message })
+        errors.push({ file, message })
         continue
       }
       if (!isObject(json)) continue
@@ -51,8 +52,8 @@ export async function discoverRulesFiles(root: string, files: readonly string[],
       for (const store of fromJson) {
         for (const rules of rulesPaths(json[store])) {
           const target = posix.normalize(posix.join(dir, rules))
-          if (target.startsWith('..') || !fileSet.has(target)) {
-            warnings.push({ file, message: `points at ${target}, which is not in the repository` })
+          if (target === '..' || target.startsWith('../') || !fileSet.has(target)) {
+            errors.push({ file, message: `points at ${target}, which is not in the repository` })
           } else {
             found.add(target)
           }
@@ -60,5 +61,5 @@ export async function discoverRulesFiles(root: string, files: readonly string[],
       }
     }
   }
-  return { files: [...found].sort(), warnings }
+  return { files: [...found].sort(), errors }
 }

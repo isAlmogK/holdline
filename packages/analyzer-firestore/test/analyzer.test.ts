@@ -83,12 +83,12 @@ describe('firestoreAnalyzer through scan', () => {
     const r = await repo({ '.holdline/config.yaml': 'firestore:\n  rules: [nope/*.rules]\n' })
     const { facts, ran } = await scan(r.root, [firestoreAnalyzer])
     expect(ran).toEqual(['firestore'])
-    expect(facts.diagnostics).toEqual([{ analyzer: 'firestore', file: '.holdline/config.yaml', severity: 'warning', message: 'firestore.rules globs match no file' }])
+    expect(facts.diagnostics).toEqual([{ analyzer: 'firestore', file: '.holdline/config.yaml', severity: 'error', message: 'firestore.rules globs match no file' }])
   })
-  it('reports discovery warnings as diagnostics', async () => {
+  it('reports discovery problems as error diagnostics', async () => {
     const r = await repo({ 'firebase.json': '{' })
     const { facts } = await scan(r.root, [firestoreAnalyzer])
-    expect(facts.diagnostics).toEqual([expect.objectContaining({ file: 'firebase.json', severity: 'warning', message: expect.stringMatching(/^invalid JSON/) })])
+    expect(facts.diagnostics).toEqual([expect.objectContaining({ file: 'firebase.json', severity: 'error', message: expect.stringMatching(/^invalid JSON/) })])
   })
   it('caches by path, content and recognizers', async () => {
     const r = await repo({ 'firestore.rules': RULES })
