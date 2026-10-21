@@ -5052,7 +5052,7 @@ git commit -m "test: add golden-ts-postgres app with 12 rules, breakages and acc
 
 - [ ] **Step 1: Write `docs/reference/facts.md`**
 
-Document, from the code as built: every fact type with its fields (copy field lists from `facts.ts`), the symbol id conventions (§5.1), the operand and atom forms (§5.3) including the Postgres `exists` doc format `pg:<table>?<column>={<operand>}&…`, how `{x=**}` path patterns work, the `via` class-prefix rule (`ts:x#Repo` covers `ts:x#Repo.update`), and the analyzer contract (`Analyzer`, `AnalyzerOutput`, how crashes become diagnostics). Use `examples/golden-ts-postgres/fixtures/facts.json` as the worked example.
+Document, from the code as built: every fact type with its fields (copy field lists from `facts.ts`), the symbol id conventions (§5.1), the operand and atom forms (§5.3) including the Postgres `exists` doc format `pg:<table>?<column>={<operand>}&…`, how `{x=**}` path patterns work, the `via` class-prefix rule (`ts:x#Repo` covers `ts:x#Repo.update`), the rule that only `exists` on the actor and actor-to-literal `eq`/`in` atoms imply `authenticated` (so analyzers for stores that deny anonymous callers, such as Firestore rules and RLS, must emit an explicit `authenticated` atom), and the analyzer contract (`Analyzer`, `AnalyzerOutput`, how crashes become diagnostics). Use `examples/golden-ts-postgres/fixtures/facts.json` as the worked example.
 
 - [ ] **Step 2: Write `docs/reference/rules-file.md`**
 
