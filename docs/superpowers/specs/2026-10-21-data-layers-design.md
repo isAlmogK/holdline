@@ -1,6 +1,6 @@
 # Holdline Phase 1: Data Layers
 
-**Status:** Step 0, Track A and Track B implemented (2026-10-21). Track C is not built yet; see [As built (step 0)](#as-built-step-0), [As built (Track A)](#as-built-track-a) and [As built (Track B)](#as-built-track-b).
+**Status:** Step 0 and Tracks A, B and C implemented (2026-10-21). Section 1 item 2 on the golden apps is still open; see [As built (step 0)](#as-built-step-0), [As built (Track A)](#as-built-track-a), [As built (Track B)](#as-built-track-b) and [As built (Track C)](#as-built-track-c).
 
 **Feature:** [Holdline feature and core design](2026-10-21-holdline-design.md) in this repo. This spec covers Phase 1 (spec 2 in the feature spec's table): the Postgres and Firestore/Storage analyzers and the database test runner.
 
@@ -372,7 +372,7 @@ Step 0 (section 2) is built. The reference docs ([facts](../../reference/facts.m
 | 2.2 / 2.3 Analyzer contract | `detect(root, files, config)` receives the config. `AnalyzerContext` also carries `recognizers`: the approved vocabulary entries' recognizers, which analyzers using them must include in their cache key. `holdline scan` and `check` pass the same recognizers. |
 | 2.4 Golden harness | `expectClean` and `expectCaught` hold the gate's assertions, and both require `holdline scan` to exit 0. An app's `breakages/` may contain only `*.patch` files (and `.gitkeep`). The per-app suite is skipped until an app has patches. |
 
-**Known gap, owned by Track C:** in Storage test files, a Firestore document (`exists` or lookup) whose path equals the Storage object's path is merged into the object seed, which makes that allow case wrong. Track C fixes it first: the record merge applies only to Firestore targets.
+**Known gap, fixed by Track C:** in Storage test files, a Firestore document (`exists` or lookup) whose path equals the Storage object's path was merged into the object seed, which made that allow case wrong. The record merge now applies only to Firestore targets; such a document is its own `store: firestore` seed (see As built (Track C)).
 
 
 ## As built (Track A)
@@ -464,3 +464,49 @@ The emulator soundness suite has not been run yet (no Java 21 where it was built
 - Core's test generator evaluates atoms with absent = undefined, `in` list-only and no `lt`/`gt` (`testgen-eval.ts`). Generated cases for atoms such as `eq(x, null)` from `get('f', null) == null`, or `in` over a map field, may expect a deny where Firestore allows. The result is a red test, not a silent pass. Owner: core and Track C.
 - The generator fills placeholders with `String(v)`. Firestore's own formatting of non-string values, or of values containing `/`, in `$(...)` may differ. Owner: core and Track C.
 - The step 0 gap above (a Storage object path equal to a Firestore lookup path merges seeds) is reachable with `firestore.get` in Storage rules. Owner: Track C.
+
+## As built (Track C)
+
+Track C (section 5) is built: `packages/testkit`, `holdline test` and the invariant extension of `generateTests`. The
+[test runner reference](../../reference/test-runner.md) describes the code; the
+[rules file reference](../../reference/rules-file.md#test-cases-holdlineteststrule-idyaml) describes generation. This
+list records where the code differs from section 5 and the decisions made while building it.
+
+**Not done: section 1 item 2 on the golden apps.** Tracks A and B have not merged to `main`, so `golden-supabase` and
+`golden-firebase` have no migrations, rules or breakages to run. That is the remaining step of Track C: rebase on
+`main`, replace `packages/testkit/src/migrations.ts` (a temporary copy of Track A's `applyMigrations` behind the same
+signature) with the import from `analyzer-postgres`, and add a golden test that runs `holdline test` green on each
+clean app and red for each data-access rule's breakage. Item 2 is exercised today only on the hand-built fixtures
+`packages/cli/test/fixtures/test-pg` and `test-fb`.
+
+| Section | As built |
+|---|---|
+| 5.1 Options | `holdline test` also takes `--facts <file>` (like `check`), used only when a test file is (re)generated: invariant cases need table facts, and tests pass a facts file. Without it, generating a file scans the project. It also takes `--regenerate`, which regenerates every selected file from the current facts: `generatedFrom` hashes only the rule and vocabulary, so a hash match does not mean the file matches the current policies. |
+| 5.1 Regeneration | An approved rule enforced by `test` with no test file gets one generated, reported as `generated: no test file`; a hash mismatch is reported as `regenerated: the rule changed`. A regeneration with identical text is not written or reported. `--store` filters before any generation. |
+| 5.1 Approve | `holdline approve` passes the cached facts (`.holdline/cache/facts.json`, when readable) to `generateTests`, so invariant files are written at approval when a scan has run. It never scans by itself. |
+| 5.1 Report | Selected rules that cannot run are visible notes (`not tested: rule is muted`, `... is not enforced by test`, `no cases can be generated for <type> rules`), and test files with no approved rule are `orphan test file` notes. When an `allow` case got `deny`, the human report adds a hint to run `holdline test --regenerate`. JSON output is `{ files, infrastructure, summary }`. A store that could not run is left out of `files`; exit 3 wins over failed cases. A missing worker result, a PGlite construction error and a failing migration are infrastructure failures. |
+| 5.2 Migrations | `packages/testkit/src/migrations.ts` is a temporary copy of `applyMigrations` (Supabase shim, default globs, dialect detection) until Track A merges. No migration files is an infrastructure failure (`no SQL migrations found ...`). |
+| 5.2 Seeding | CHECK constraints stay on in replica mode, so the filler for numbers is `1` (not `0`) and a column with a CHECK `col = ANY (ARRAY['a', ...])` or `col IN ('a', ...)` gets its first literal (matched on the exact column name). `uuid` filler is `'filler'` (mapped to a UUID), arrays get `[]`, `json` gets `{}`, dates and timestamps the epoch. The filler lives in core (`testgen-filler.ts`) and is shared by the runner and the invariant generator. Seed rows are inserted with `returning` their primary key, so database-generated keys are known; identity `always` and generated columns are left out. |
+| 5.2 Keys | Not "the mapped `id` field, else a UUID v5 of the table and position": every primary-key column the case does not set gets the runner's key, `uuid` → UUID v5 of `<schema>.<table>#<position>` (`#do` for the operation's row), numeric → `1000 + position` (`999`), text → `<schema>.<table>-<position>` (`-do`). Generated invariant rows leave primary-key columns out unless the rule names them or they are foreign keys, so the two rows of a `unique` case differ only in the unique columns. |
+| 5.2 Values | The stable integer for a numeric column is in 1..30000 (fits `smallint`). `json`/`jsonb` values are sent as JSON text; `<type>[]` maps each element. A claim whose string value was mapped to a UUID elsewhere in the case gets the same UUID, so `auth.jwt() ->> 'org_id' = org_id::text` agrees with the seeded `uuid` column. The shim reads `request.jwt.claims` (not `request.jwt.claim.*`). |
+| 5.2 Operations | `update` and `delete` run with no `WHERE` clause, so Postgres applies only that op's policies and not the `SELECT` policies a `WHERE` would bring in; the record is checked afterwards as superuser (`reset role`): a new `ctid` means updated, a missing row means deleted. When the case seeds several rows of the table, a refused `update` or `delete` is `error` (the runner cannot tell which row was refused). Record keys come from `insert … returning`, and a record its key cannot find is `error`. `list` with no seed row of the table is `error`; a table without a primary key is `error`. `read`/`list` refused with `42501` is `deny`. |
+| 5.2 Reject | `reject` passes on any of the five constraint SQLSTATEs (`23502`, `23503`, `23505`, `23514`, `22P02`) on `create` and `update`: the case format has no code field, and the allow case proves the complete row is valid, so the only change in a reject case is the broken column. Invariant cases run as superuser with `session_replication_role = origin` and keep a `WHERE` on the key for `update` and `delete`. |
+| 5.3 Emulator | When the emulator variables are not set, `holdline test` does not re-run itself: it starts a worker process inside `firebase emulators:exec` (`node --import tsx firebase-worker.ts in.json out.json`), in a temp directory with a generated `firebase.json` (free ports, UI off, deny-all rules for a store with no rules), and reads the results from a file. The CLI is also called in process by tests, and the worker gets exactly the Firebase files. The run times out after 180 s. firebase-tools 15 needs Java 21 or later: with an older JDK the emulator does not start and `holdline test` exits 3 with the install hint. |
+| 5.3 Rules files | One rules file per store: the config's `rules` globs (more than one match is a config error), else `firebase.json`'s `rules` path, else `<store>.rules` at the root. Firestore files never run without Firestore rules and Storage files never without Storage rules (an infrastructure failure: a running emulator would keep its old rules). Storage runs also load the Firestore rules, which Storage rules read. |
+| 5.3 Per case | `clearStorage()` too when Storage files run. Deny means the error code `permission-denied` or `storage/unauthorized`; any other failure is `error`, which fails the case. `deny` and `reject` cases both pass on deny. `as.role` is not sent. Storage `list` is `listAll`; create and update upload an empty object with `data` as custom metadata. |
+| 5.3 Storage metadata | Seed and request `data` becomes custom metadata: strings as is, numbers and booleans as strings, `null` dropped, other values as JSON (custom metadata values are strings). In Storage files only `store: storage` seeds are uploaded; `store: firestore` seeds are documents. |
+| 5.4 Generation | `generateTests(rule, vocab, facts?)`. Postgres invariant cases are `create` cases with `as: null`; every foreign key the valid row sets gets a seeded parent row; `unique` seeds the valid row and inserts it again; `fk` uses `missing-1`, ...; a table missing from the facts is skipped with a reason pointing to `holdline scan` and `--regenerate`. Firestore invariant cases satisfy the first usable `create` policy in the facts; a deny case is skipped when another create policy allows the denied write or cannot be evaluated. Storage invariants are skipped ("storage invariants are not generated; check them statically"): the section lists Firestore invariants only. |
+| 5.4 Data-access with facts (added during implementation) | Allow cases failed on the emulator when the store's policy needed more than the rule names (a create rule that also checks `status`). With facts, each op's allowed world also satisfies the first of the target's policies for that op that is only an `and` of atoms, uses no path param the target lacks, can be satisfied with the rule and adds no per-op skip. Policy path params are renamed to the target's (`FactIndex.alignedPolicies`), and an atom equivalent to a rule atom (`a == b`, `b == a`) is the rule atom. Deny cases stay one per rule atom with the same names. Code: `packages/core/src/testgen-policy.ts`. |
+| As built (step 0) known gap | Fixed first, as planned: the record merge (an `exists` or lookup on the record's own path) applies only to Firestore targets. |
+| 9 Testing | The CI workflow does not install Java or firebase-tools, so the `@emulator` suites skip there; locally and in CI they skip each test with the reason and print it once on stderr. They were run on Java 19 with firebase-tools 13 on `PATH`. `@firebase/rules-unit-testing` 6 declares Node 24.12 or later; the repo runs and tests on Node 22. The model-based prover test in `logic.test.ts` got a longer timeout, as the PGlite suites slow the parallel run. |
+
+Known limits left by Track C:
+
+- Firestore invariant generation reads the create policies without renaming their path params to the target's
+  (`FactIndex.policies`, not `alignedPolicies`), so a policy written with other param names can give no case or a
+  skipped deny case.
+- Column types the filler does not know (`time`, `interval`, `bytea`, `inet`, ...) get `'x'`, which fails at run time
+  as `error`, not as a skip.
+- An in-process emulator run has no timeout, and Ctrl-C does not stop an emulator group started by `emulators:exec`.
+- `list` on Postgres is allowed when any seeded row of the table is visible; `update` that changes a primary-key
+  column is checked by the old key.

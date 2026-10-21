@@ -130,13 +130,14 @@ Until the analyzers land, facts come from a hand-written file (`--facts`). The e
 | `holdline check` | Check approved rules (`--format human\|agent\|json`, `--strict`, `--rule`) |
 | `holdline explain <id>` | Show a rule, its evidence and its current status |
 | `holdline scan` | Run the analyzers and cache the fact graph |
+| `holdline test` | Run the generated database test cases on PGlite and the Firebase emulator (`--rule`, `--store`, `--format`, `--regenerate`) |
 | `holdline infer --prompt` | Print the prompt your agent uses to propose rules |
 | `holdline propose <file>` | Validate proposals and stage them for review |
 | `holdline review` | Approve or reject staged proposals one by one |
 | `holdline approve` / `reject` | Approve or drop staged proposals; re-approve edited rules |
 | `holdline mute <id> --reason` | Turn a rule off, recording who and why |
 
-Exit codes: `0` clean · `1` a rule is broken · `2` usage or config error · `3` analyzer or internal error.
+Exit codes: `0` clean · `1` a rule is broken · `2` usage or config error · `3` analyzer, test runner or internal error.
 
 ## Roadmap
 
@@ -153,6 +154,7 @@ Exit codes: `0` clean · `1` a rule is broken · `2` usage or config error · `3
 - 📘 [Design](docs/superpowers/specs/2026-10-21-holdline-design.md): the why, the user flow and the architecture
 - 🧩 [Fact graph reference](docs/reference/facts.md): what analyzers emit
 - 📜 [Rules file reference](docs/reference/rules-file.md): `holdline.rules`, the checkers and the test-case format
+- 🧪 [Test runner reference](docs/reference/test-runner.md): `holdline test`, its runners and its report
 
 Holdline is built test first, largely by AI agents working from written specs and plans, with every task reviewed before it merges. The specs and plans live in [`docs/superpowers/`](docs/superpowers/). Read [CLAUDE.md](CLAUDE.md) before changing `packages/core`. Issues and ideas are welcome.
 
