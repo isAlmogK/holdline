@@ -35,6 +35,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@holdline/analyzer-firestore':
+        specifier: workspace:*
+        version: link:../analyzer-firestore
       '@holdline/core':
         specifier: workspace:*
         version: link:../core
