@@ -2958,7 +2958,7 @@ git commit -m "test(golden-supabase): add one file-patch breakage per rule"
 
 **Files:**
 - Modify: `docs/reference/facts.md` (Postgres rows), `docs/superpowers/specs/2026-10-21-data-layers-design.md` (status line, As built (Track A)), `CLAUDE.md` only if a convention changed (none is expected)
-- Create: hand-over note `/Users/Almog/Library/Application Support/Claude/side-session-notes/local_029db5ef-25b9-4405-adb5-c835188bec27/track-a-postgres.md` (outside the repo, not committed)
+- Create: hand-over note `track-a-postgres.md` in the shared side-session notes folder (outside the repo, not committed)
 
 - [ ] **Step 1: facts.md**
 
