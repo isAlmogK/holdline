@@ -69,7 +69,7 @@ describe('lookup operands', () => {
     }
   })
   it('rejects malformed lookups', () => {
-    for (const o of ['doc(users/x).f', 'doc(/a).', 'doc(/a/(b)).f', 'doc(/a)']) {
+    for (const o of ['doc(users/x).f', 'doc(/a).', 'doc(/a/(b)).f', 'doc(/a)', 'doc(/a/{actor.uid).f', 'doc(/a/{nope}).f', 'doc(/a/{resource.x.y}).f', 'doc(/a/{}/b).f', 'doc(/a/uid}).f']) {
       expect(OperandSchema.safeParse(o).success).toBe(false)
     }
   })

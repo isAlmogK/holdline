@@ -10,6 +10,9 @@ export type World = {
   incoming: Record<string, unknown>
   docs: SeedDoc[]
   counter: number
+  // The concretized Firestore/Storage path of the record under test. A lookup of this path writes to `resource`.
+  targetPath?: string
+  recordLookup: boolean
 }
 
 export class Unsupported extends Error {}
@@ -29,9 +32,9 @@ export function read(w: World, o: Operand): { fixed: boolean; value: unknown } {
   return { fixed: false, value: undefined }
 }
 
-function assign(target: Record<string, unknown>, key: string, o: string, value: unknown, force: boolean): void {
+function assign(target: Record<string, unknown>, key: string, o: string, value: unknown): void {
   if (key.includes('.')) throw new Unsupported(`nested field ${o} is not generated yet; check it statically`)
-  if (!force && key in target && !deepEqual(target[key], value)) throw new Unsupported(`conflicting conditions on ${o}; check them statically`)
+  if (key in target && !deepEqual(target[key], value)) throw new Unsupported(`conflicting conditions on ${o}; check them statically`)
   target[key] = value
 }
 
@@ -43,28 +46,58 @@ export function addDoc(w: World, doc: SeedDoc): SeedDoc {
     w.docs.push(doc)
     return doc
   }
-  for (const [k, v] of Object.entries(doc.data)) assign(existing.data, k, k, v, false)
+  for (const [k, v] of Object.entries(doc.data)) assign(existing.data, k, k, v)
   return existing
 }
 
-export function set(w: World, o: Operand, value: unknown, force = false): void {
+export function set(w: World, o: Operand, value: unknown): void {
   if (typeof o !== 'string') throw new Unsupported(`cannot set a literal to ${JSON.stringify(value)}`)
   const lookup = isLookupOperand(o) ? parseLookup(o) : undefined
   if (lookup) {
-    const doc = addDoc(w, resolveDoc(w, lookup.path, true))
-    assign(doc.data, lookup.field, o, value, force)
-  } else if (o.startsWith('resource.')) assign(w.resource, o.slice(9), o, value, force)
-  else if (o.startsWith('incoming.')) assign(w.incoming, o.slice(9), o, value, force)
-  else if (o.startsWith('actor.claim.') && w.actor) assign(w.actor.claims, o.slice(12), o, value, force)
+    const { path, data } = resolveDocCreating(w, lookup.path)
+    if (path === w.targetPath) {
+      w.recordLookup = true
+      assign(w.resource, lookup.field, o, value)
+    } else assign(addDoc(w, { path, data }).data, lookup.field, o, value)
+  } else if (o.startsWith('resource.')) assign(w.resource, o.slice(9), o, value)
+  else if (o.startsWith('incoming.')) assign(w.incoming, o.slice(9), o, value)
+  else if (o.startsWith('actor.claim.') && w.actor) assign(w.actor.claims, o.slice(12), o, value)
   else if (o === 'actor.role' && w.actor) {
-    if (!force && w.actor.role !== undefined && w.actor.role !== String(value)) throw new Unsupported(`conflicting conditions on ${o}; check them statically`)
+    if (w.actor.role !== undefined && w.actor.role !== String(value)) throw new Unsupported(`conflicting conditions on ${o}; check them statically`)
     w.actor.role = String(value)
   } else throw new Unsupported(`cannot set ${o} to ${JSON.stringify(value)}`)
 }
 
-// With `create`, a stored-record or incoming field that nothing has set yet gets a fresh value, because a
-// lookup path that depends on it needs one. `exists` docs keep the stricter rule: an unset placeholder is skipped.
-export function resolveDoc(w: World, doc: string, create = false): SeedDoc {
+// The value an operand has in the world so far (`undefined` when nothing has set it yet).
+export function current(w: World, o: Operand): unknown {
+  const r = read(w, o)
+  if (r.fixed) return r.value
+  const lookup = isLookupOperand(o) ? parseLookup(o) : undefined
+  if (!lookup) return valueOf(w, o as string)
+  if (lookup.field.includes('.')) throw new Unsupported(`nested field ${o} is not generated yet; check it statically`)
+  let path: string
+  try {
+    path = resolveDoc(w, lookup.path).path
+  } catch (e) {
+    if (e instanceof Unsupported) return undefined
+    throw e
+  }
+  const data = path === w.targetPath ? w.resource : w.docs.find(d => d.path === path)?.data
+  return data?.[lookup.field]
+}
+
+// Resolves `{operand}` placeholders from the world; an unset one is skipped (`cannot resolve`).
+export function resolveDoc(w: World, doc: string): SeedDoc {
+  return resolve(w, doc, false)
+}
+
+// Like `resolveDoc`, but a stored-record or incoming field that nothing has set yet gets a fresh value
+// (and is set in the world), because a lookup path that depends on it needs one.
+export function resolveDocCreating(w: World, doc: string): SeedDoc {
+  return resolve(w, doc, true)
+}
+
+function resolve(w: World, doc: string, create: boolean): SeedDoc {
   const fill = (operand: string) => {
     const r = read(w, operand)
     let v = r.fixed ? r.value : valueOf(w, operand)

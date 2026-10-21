@@ -3,14 +3,16 @@ import { z } from 'zod'
 export type Literal = string | number | boolean | null | (string | number)[]
 export type Operand = string | { literal: Literal }
 
-const LOOKUP = String.raw`doc\(/[^()]*\)\.[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*`
+const PLACEHOLDER = String.raw`\{(?:actor\.uid|actor\.role|actor\.claim\.[A-Za-z0-9_.]+|resource\.[A-Za-z0-9_]+|incoming\.[A-Za-z0-9_]+|param\.[A-Za-z0-9_]+)\}`
+const LOOKUP_PATH = String.raw`/(?:[^(){}]|${PLACEHOLDER})*`
+const LOOKUP_FIELD = String.raw`[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*`
 export const OPERAND_PATTERN = new RegExp(
-  String.raw`^(actor\.uid|actor\.role|actor\.claim\.[A-Za-z0-9_.]+|resource\.[A-Za-z0-9_.]+|incoming\.[A-Za-z0-9_.]+|param\.[A-Za-z0-9_]+|${LOOKUP})$`,
+  String.raw`^(actor\.uid|actor\.role|actor\.claim\.[A-Za-z0-9_.]+|resource\.[A-Za-z0-9_.]+|incoming\.[A-Za-z0-9_.]+|param\.[A-Za-z0-9_]+|doc\(${LOOKUP_PATH}\)\.${LOOKUP_FIELD})$`,
 )
 
-const LOOKUP_PARTS = /^doc\((\/[^()]*)\)\.([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)$/
+const LOOKUP_PARTS = new RegExp(String.raw`^doc\((${LOOKUP_PATH})\)\.(${LOOKUP_FIELD})$`)
 
-// A lookup operand reads a field of another document: `doc(<path>).<field>`. The path may hold `{operand}` placeholders.
+// A lookup operand reads a field of another document: `doc(<path>).<field>`. The path may hold `{operand}` placeholders (valid operands only; a stored-record or incoming placeholder is one field deep).
 export function parseLookup(o: string): { path: string; field: string } | undefined {
   const m = LOOKUP_PARTS.exec(o)
   return m ? { path: m[1]!, field: m[2]! } : undefined

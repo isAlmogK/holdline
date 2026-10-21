@@ -1,6 +1,6 @@
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
-import type { Atom, Expr, Literal, Operand } from '../src/expr.js'
+import { parseLookup, type Atom, type Expr, type Literal, type Operand } from '../src/expr.js'
 import { atomImplies, collectRefs, expand, flattenAnd, implies, mentionsOperand, prove, renameParams } from '../src/logic.js'
 
 const a = (atom: Atom): Expr => ({ atom })
@@ -144,7 +144,8 @@ describe('helpers', () => {
 // Soundness against a finite model: whenever implies(c, r) is ok, r holds in every world where c holds.
 describe('prover soundness (model based)', () => {
   type Actor = { uid: string; role: string; claims: Record<string, string> } | null
-  type World = { actor: Actor; resource: Record<string, string | null>; present: ReadonlySet<string> }
+  type Tab = Record<string, Record<string, Literal>>
+  type World = { actor: Actor; resource: Record<string, string | null>; present: ReadonlySet<string>; tab: Tab }
   const NO_ACTOR = Symbol('no actor')
 
   const memberDoc = '/teams/{resource.team_id}/members/{actor.uid}'
@@ -159,9 +160,19 @@ describe('prover soundness (model based)', () => {
     ...['t1', 'null'].flatMap(team => ['u1', 'u2'].map(uid => `/teams/${team}/members/${uid}`)),
     '/admins/u1', '/admins/u2',
   ]
+  // Documents that lookup operands read: `/m/<uid>` has a role, `/u/<uid>` has a list of teams.
+  const tabs: Tab[] = [
+    {},
+    { '/m/u1': { role: 'admin' }, '/u/u1': { teams: ['t1'] } },
+    { '/m/u1': { role: 'member' }, '/u/u1': { teams: [] } },
+    { '/m/u2': { role: 'admin' }, '/u/u2': { teams: ['t1'] } },
+    { '/m/u1': { role: 'admin' }, '/m/u2': { role: 'admin' }, '/u/u1': { teams: ['t1'] }, '/u/u2': { teams: ['t1', 't2'] } },
+    { '/m/u1': { role: 'member' }, '/m/u2': { role: 'member' }, '/m/null': { role: 'admin' } },
+  ]
   const worlds: World[] = []
+  // The document table cycles with the mask, so every table meets every actor and resource without multiplying the world count.
   for (const actor of actors) for (const resource of resources) for (let mask = 0; mask < 1 << paths.length; mask++) {
-    worlds.push({ actor, resource, present: new Set(paths.filter((_, i) => mask & (1 << i))) })
+    worlds.push({ actor, resource, tab: tabs[(mask + worlds.length) % tabs.length]!, present: new Set(paths.filter((_, i) => mask & (1 << i))) })
   }
 
   const value = (o: Operand, w: World): Literal | typeof NO_ACTOR => {
@@ -173,6 +184,12 @@ describe('prover soundness (model based)', () => {
       return w.actor.claims[o.slice('actor.claim.'.length)] ?? null
     }
     if (o.startsWith('resource.')) return w.resource[o.slice('resource.'.length)] ?? null
+    const lookup = parseLookup(o)
+    if (lookup) {
+      if (o.includes('{actor.') && !w.actor) return NO_ACTOR
+      const path = lookup.path.replace(/\{([^}]+)\}/g, (_, op: string) => String(value(op, w)))
+      return w.tab[path]?.[lookup.field] ?? null
+    }
     return null
   }
   // Atoms with actor operands are false for an anonymous caller (actor null).
@@ -230,6 +247,11 @@ describe('prover soundness (model based)', () => {
     a({ op: 'isNull', operand: 'actor.uid' }),
     a({ op: 'exists', doc: memberDoc }),
     a({ op: 'exists', doc: adminDoc }),
+    a({ op: 'eq', left: 'doc(/m/{actor.uid}).role', right: { literal: 'admin' } }),
+    a({ op: 'eq', left: { literal: 'member' }, right: 'doc(/m/{actor.uid}).role' }),
+    a({ op: 'eq', left: 'doc(/m/{resource.owner_id}).role', right: { literal: 'admin' } }),
+    a({ op: 'in', left: 'resource.team_id', right: 'doc(/u/{actor.uid}).teams' }),
+    a({ op: 'in', left: 'actor.claim.t', right: 'doc(/u/{actor.uid}).teams' }),
     { ref: 'staff' }, { ref: 'ghost' },
     { opaque: 'o1' }, { opaque: 'o2' },
   ]
@@ -307,6 +329,13 @@ describe('lookup operands in implication', () => {
   it('renameParams with fresh names renames unmapped params inside lookup paths', () => {
     const e: Expr = { atom: { op: 'eq', left: 'doc(/a/{param.x}).f', right: 'param.x' } }
     expect(renameParams(e, new Map(), { fresh: true })).toEqual({ atom: { op: 'eq', left: 'doc(/a/{param.__p0}).f', right: 'param.__p0' } })
+  })
+  it('mentionsOperand finds placeholders inside lookup paths and exists docs', () => {
+    const e: Expr = { atom: { op: 'in', left: 'resource.accountId', right: 'doc(/users/{actor.uid}/{param.p}).accountIds' } }
+    expect(mentionsOperand(e, 'actor.uid')).toBe(true)
+    expect(mentionsOperand(e, 'param.p')).toBe(true)
+    expect(mentionsOperand(e, 'param.q')).toBe(false)
+    expect(mentionsOperand({ atom: { op: 'isNull', operand: 'doc(/a/{resource.x}).f' } }, 'resource.x')).toBe(true)
   })
   it('mentionsOperand finds a lookup operand', () => {
     const e: Expr = { atom: { op: 'in', left: 'resource.accountId', right: 'doc(/users/{actor.uid}).accountIds' } }

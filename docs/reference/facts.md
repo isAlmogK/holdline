@@ -182,7 +182,7 @@ A string matching `OPERAND_PATTERN`, or `{ literal }`.
 | `resource.<field>` | The stored record |
 | `incoming.<field>` | The data being written |
 | `param.<name>` | A route or path parameter (no dots) |
-| `doc(<path>).<field>` | A field of another document (lookup). `<path>` starts with `/`, has no parentheses and may hold `{<operand>}` placeholders (`doc(/users/{actor.uid}).accountIds`); `<field>` is one or more `[A-Za-z0-9_]+` segments joined by dots. The Firestore analyzer maps `get(P).data.f` to it. Two lookups are equal only when their strings are equal |
+| `doc(<path>).<field>` | A field of another document (lookup). `<path>` starts with `/`, has no parentheses and may hold `{<operand>}` placeholders, valid operands only and `resource.*`/`incoming.*` one field deep (`doc(/users/{actor.uid}).accountIds`); other braces are rejected; `<field>` is one or more `[A-Za-z0-9_]+` segments joined by dots. The Firestore analyzer maps `get(P).data.f` to it. Two lookups are equal only when their strings are equal |
 | `{ literal: string \| number \| boolean \| null \| (string \| number)[] }` | Constant |
 
 `in` takes an **array literal** on the right (`{ literal: ['admin', 'trainer'] }`). Any other right side is never

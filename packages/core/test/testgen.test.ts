@@ -249,13 +249,93 @@ describe('generateTests with lookup operands', () => {
     ])
   })
 
-  it('removes the looked-up document when breaking an exists on the same path', () => {
+  it('skips the exists deny case when a lookup needs the same document', () => {
     const file = generateTests(rule({ and: [
       { atom: { op: 'exists', doc: '/accounts/{resource.accountId}/members/{actor.uid}' } },
       { atom: { op: 'eq', left: 'doc(/accounts/{resource.accountId}/members/{actor.uid}).role', right: { literal: 'admin' } } },
     ] }), vocab)!
-    const denyNoDoc = file.cases.find(c => c.name.includes('denied without exists'))!
-    expect(denyNoDoc.seed.filter(s => s.path.startsWith('/accounts'))).toEqual([])
+    expect(file.cases.map(c => c.name)).toEqual([
+      'read: allowed when every condition holds',
+      expect.stringContaining('denied without doc(/accounts/{resource.accountId}/members/{actor.uid}).role'),
+    ])
+    expect(file.skipped).toEqual([expect.stringMatching(/^read: cannot deny only exists\(.*\) \(other conditions depend on the same values\)$/)])
+    const member = file.cases[1]!.seed.find(s => s.path === '/accounts/value-1/members/user-1')
+    expect(member!.data).toEqual({ role: 'other-value' })
+  })
+
+  describe('atoms that share values', () => {
+    const accountIds = 'doc(/users/{actor.uid}).accountIds'
+    const memberRole = 'doc(/accounts/{resource.accountId}/members/{actor.uid}).role'
+    const inUsers = { atom: { op: 'in', left: 'resource.accountId', right: accountIds } }
+    const isAdmin = { atom: { op: 'eq', left: memberRole, right: { literal: 'admin' } } }
+    const shape = (f: { cases: { name: string; as: unknown; seed: { path: string }[]; do: unknown; expect: string }[] }) =>
+      f.cases.map(c => ({ ...c, seed: [...c.seed].sort((x, y) => x.path.localeCompare(y.path)) })).sort((x, y) => x.name.localeCompare(y.name))
+
+    it('generates the same cases in either atom order', () => {
+      const ab = generateTests(rule({ and: [inUsers, isAdmin] }), vocab)!
+      const ba = generateTests(rule({ and: [isAdmin, inUsers] }), vocab)!
+      expect(ab.skipped).toEqual([])
+      expect(ba.skipped).toEqual([])
+      expect(ab.cases).toHaveLength(3)
+      expect(shape(ba)).toEqual(shape(ab))
+    })
+
+    it('uses an already set stored-record field when a path param fixes it', () => {
+      const file = generateTests(RuleSchema.parse({
+        id: 'R-001', text: 't', status: 'approved', type: 'data-access',
+        target: { store: 'firestore', path: '/accounts/{accountId}/dogs/{dogId}' }, ops: ['read'],
+        requires: { and: [
+          { atom: { op: 'eq', left: 'resource.accountId', right: 'param.accountId' } },
+          inUsers,
+        ] },
+      }), vocab)!
+      expect(file.skipped).toEqual([])
+      expect(file.cases[0]!.seed).toEqual([
+        { path: '/accounts/accountId-1/dogs/dogId-1', data: { accountId: 'accountId-1' } },
+        { path: '/users/user-1', data: { accountIds: ['accountId-1'] } },
+      ])
+    })
+
+    it('denies the membership atom without moving the record the role lookup is keyed on', () => {
+      const file = generateTests(rule({ and: [inUsers, isAdmin] }), vocab)!
+      const deny = file.cases.find(c => c.name.includes('denied without resource.accountId in'))!
+      expect(deny.seed).toContainEqual({ path: '/dogs/dogId-1', data: { accountId: 'value-1' } })
+      expect(deny.seed).toContainEqual({ path: '/accounts/value-1/members/user-1', data: { role: 'admin' } })
+      expect(deny.seed).toContainEqual({ path: '/users/user-1', data: { accountIds: ['other-value'] } })
+    })
+
+    it('denies exactly one atom when a path param fixes the record field the lookup is keyed on', () => {
+      const file = generateTests(RuleSchema.parse({
+        id: 'R-001', text: 't', status: 'approved', type: 'data-access',
+        target: { store: 'firestore', path: '/accounts/{accountId}/dogs/{dogId}' }, ops: ['read'],
+        requires: { and: [{ atom: { op: 'eq', left: 'resource.accountId', right: 'param.accountId' } }, isAdmin] },
+      }), vocab)!
+      expect(file.skipped).toEqual([])
+      const [, denyParam, denyRole] = file.cases
+      // The record no longer matches the path param; the member doc is keyed on the record's value and still has the role.
+      expect(denyParam!.seed).toEqual([
+        { path: '/accounts/accountId-1/dogs/dogId-1', data: { accountId: 'other-value' } },
+        { path: '/accounts/other-value/members/user-1', data: { role: 'admin' } },
+      ])
+      // The record matches the path param; only the role differs.
+      expect(denyRole!.seed).toEqual([
+        { path: '/accounts/accountId-1/dogs/dogId-1', data: { accountId: 'accountId-1' } },
+        { path: '/accounts/accountId-1/members/user-1', data: { role: 'other-value' } },
+      ])
+    })
+  })
+
+  it('merges a lookup of the target document into the record seed', () => {
+    const file = generateTests(rule({ atom: { op: 'eq', left: 'doc(/dogs/{param.dogId}).ownerId', right: 'actor.uid' } }), vocab)!
+    expect(file.skipped).toEqual([])
+    expect(file.cases[0]!.seed).toEqual([{ path: '/dogs/dogId-1', data: { ownerId: 'user-1' } }])
+    expect(file.cases[1]!.seed).toEqual([{ path: '/dogs/dogId-1', data: { ownerId: 'other-value' } }])
+  })
+
+  it('does not generate create for a lookup of the target document', () => {
+    const file = generateTests(rule({ atom: { op: 'eq', left: 'doc(/dogs/{param.dogId}).ownerId', right: 'actor.uid' } }, ['create']), vocab)!
+    expect(file.cases).toEqual([])
+    expect(file.skipped[0]).toMatch(/^create: the condition reads the stored record/)
   })
 
   it('skips dotted lookup fields and unsupported comparisons', () => {

@@ -155,13 +155,16 @@ export function collectRefs(expr: Expr): string[] {
   return []
 }
 
+// True when the operand appears as an operand, or as a `{operand}` placeholder in an `exists` doc or a lookup path.
 export function mentionsOperand(expr: Expr, operand: string): boolean {
+  const placeholder = `{${operand}}`
+  const mentions = (o: Operand) => o === operand || (isLookupOperand(o) && o.includes(placeholder))
   return atoms(expr).some(a => {
     switch (a.op) {
       case 'authenticated': return false
-      case 'exists': return a.doc.includes(`{${operand}}`)
-      case 'isNull': return a.operand === operand
-      default: return a.left === operand || a.right === operand
+      case 'exists': return a.doc.includes(placeholder)
+      case 'isNull': return mentions(a.operand)
+      default: return mentions(a.left) || mentions(a.right)
     }
   })
 }

@@ -404,13 +404,15 @@ How each atom is satisfied and then broken:
 | Atom | Satisfy | Break |
 |---|---|---|
 | `authenticated` | Default actor | `as: null` |
-| `isNull x` | Sets `x` to null | Sets `x` to `'not-null'` |
-| `in x [..]` | Sets `x` to the first value | Sets `x` to `'not-allowed'` |
-| `in x doc(P).f` | Sets `x` (the fixed value, or a new `value-n`), then seeds the document at `P` with `f` = `[value]` | Sets a `resource.*` or `incoming.*` `x` to `'other-value'`; else sets `f` to `['other-value']` |
-| `eq a b` | Copies the fixed side (`actor.uid`, `param.*`, literal) to the other, or invents `value-n` for both. A `doc(P).f` side seeds field `f` of the document at `P` | Sets the `resource.*` or `incoming.*` side to `'other-value'`; else the looked-up field `f` to `'other-value'`; else a claim or role side; else changes the actor uid to `user-2` |
-| `exists doc` | Adds the document to the seed, filling placeholders from the world. Postgres `pg:<table>?<col>={<operand>}...` becomes a row | Leaves the document out |
+| `isNull x` | Sets `x` to null | Pins `x` to `'not-null'` |
+| `in x [..]` | Sets `x` to the first value | Pins `x` to `'not-allowed'` |
+| `in x doc(P).f` | Uses `x` (the fixed value, the value already set, or a new `value-n`), then seeds the document at `P` with `f` = `[value]` | Pins `x` (a `resource.*`, `incoming.*`, claim or role operand) to `'other-value'`, or pins `f` to `['other-value']` |
+| `eq a b` | Copies the fixed side (`actor.uid`, `param.*`, literal) to the other; else copies the side that is already set; else invents `value-n` for both. A `doc(P).f` side seeds field `f` of the document at `P` | Pins the `resource.*` or `incoming.*` side to `'other-value'`; else the looked-up field `f`; else a claim or role side; else changes the actor uid to `user-2` |
+| `exists doc` | Adds the document to the seed, filling placeholders from the world. Postgres `pg:<table>?<col>={<operand>}...` becomes a row | Satisfies the other atoms without it |
 
-Atoms are satisfied in three stages: plain atoms, then atoms with a lookup operand, then `exists` atoms, so the placeholders they refer to already have values. A `resource.*` or `incoming.*` field that only a lookup path needs (`doc(/accounts/{resource.accountId}/members/{actor.uid}).role`) gets a fresh `value-n`; an `exists` doc alone does not (its unset placeholder is skipped). A seeded Firestore document is unique per path: an `exists` doc and lookups on the same path merge into one seed entry with the fields combined (conflicting values are skipped as `conflicting conditions`). Breaking an `exists` also removes any document seeded at its path by a lookup.
+Atoms are satisfied in three stages: plain atoms, then atoms with a lookup operand, then `exists` atoms, so the placeholders they refer to already have values. An operand that is already set keeps its value (`in`/`eq` read it before inventing one), so the result does not depend on atom order. A `resource.*` or `incoming.*` field that only a lookup path needs (`doc(/accounts/{resource.accountId}/members/{actor.uid}).role`) gets a fresh `value-n`; an `exists` doc alone does not (its unset placeholder is skipped). A seeded Firestore document is unique per path: an `exists` doc and lookups on the same path merge into one seed entry with the fields combined (conflicting values are skipped as `conflicting conditions`). A lookup of the target document itself (`doc(/dogs/{param.dogId}).ownerId` on `/dogs/{dogId}`) writes to the record, so it reads the stored record like a `resource.*` operand.
+
+A `deny` world is not the allowed world edited: it is solved again around the pin that falsifies the atom (pins on plain operands are applied first, pins on lookup operands with the lookup atoms), so documents and paths keyed on a pinned value follow it. The generator then evaluates every atom in the world and keeps it only if the broken atom is false and every other atom holds. Candidate pins are tried in order, first those no other atom reads or builds a path from. Breaking `authenticated` sets `as: null`, which also makes every atom that reads the actor false; that is not checked.
 
 ### When generation is skipped
 
@@ -432,7 +434,8 @@ Per op, only that op is skipped (the others are still generated) and the reason 
 
 | Case | Reason |
 |---|---|
-| `create` and an atom reads the stored record (`resource.*`, or an `exists` doc or lookup path containing `{resource.`) | `create: the condition reads the stored record, which does not exist on create` |
+| `create` and an atom reads the stored record (`resource.*`, an `exists` doc or lookup path containing `{resource.`, or a lookup of the target document) | `create: the condition reads the stored record, which does not exist on create` |
+| A deny case that would have to break more than one atom (every pin makes another atom false), for example `exists(P)` together with a lookup on `P`: the case for that atom only | `<op>: cannot deny only <atom> (other conditions depend on the same values)` |
 | `list` and the satisfied record has fields | `list: needs query filters to test; read cases cover the condition` |
 
 Parse and write with `parseTestFile` / `serializeTestFile`.
