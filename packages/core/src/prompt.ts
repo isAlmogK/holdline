@@ -4,6 +4,12 @@ import { formatExpr } from './format.js'
 import { ProposalBatchSchema } from './proposals.js'
 import type { RulesFile } from './rules.js'
 
+// Tokens are estimated as 4 characters each.
+const CHARS_PER_TOKEN = 4
+// Room that must remain after the header so at least some facts can be shown.
+const MIN_ROOM_AFTER_HEADER = 200
+const SECTIONS_NOTICE = '… more sections not shown; use --area <path> to narrow'
+
 export function proposalJsonSchema(): object {
   return z.toJSONSchema(ProposalBatchSchema, { io: 'input' }) as object
 }
@@ -29,9 +35,16 @@ Guidelines:
 - Do not repeat existing rules.
 `
 
+// An area is a path prefix matched on segment boundaries: "src" and "src/" both mean the src directory.
+function normalizeArea(area: string | undefined): string | undefined {
+  if (!area) return undefined
+  return area.endsWith('/') ? area : `${area}/`
+}
+
 export function condenseFacts(facts: Facts, opts: { area?: string } = {}): { title: string; lines: string[] }[] {
+  const area = normalizeArea(opts.area)
   const fileOf = new Map(facts.symbols.map(s => [s.id, s.location?.file]))
-  const inArea = (file: string | undefined) => !opts.area || (!!file && file.startsWith(opts.area))
+  const inArea = (file: string | undefined) => !area || (!!file && file.startsWith(area))
   const guardsAt = (id: string) => facts.guards.filter(g => g.at === id).map(g => formatExpr(g.requires))
 
   const routes = facts.routes.filter(r => inArea(fileOf.get(r.handler))).map(r => {
@@ -63,6 +76,7 @@ export function condenseFacts(facts: Facts, opts: { area?: string } = {}): { tit
 
   const policies = facts.policies.filter(p => inArea(p.evidence?.file)).map(p =>
     `${p.store} ${p.target}: ${p.ops.join(', ')} if ${formatExpr(p.condition)} [${p.id}]`)
+  // Collections are not file-located, so they are always included, whatever the area.
   const collections = facts.collections.map(c => `${c.path}${c.fields.length > 0 ? `: ${c.fields.join(', ')}` : ''}`)
   const ids = facts.symbols.filter(s => inArea(s.location?.file)).map(s => s.id)
 
@@ -76,8 +90,11 @@ export function condenseFacts(facts: Facts, opts: { area?: string } = {}): { tit
   ].filter(s => s.lines.length > 0)
 }
 
+const sectionNotice = (notShown: number) => `… ${notShown} more not shown; use --area <path> to narrow`
+
 export function buildInferPrompt(facts: Facts, file: RulesFile, opts: { area?: string; budgetTokens?: number } = {}): string {
-  const budgetChars = (opts.budgetTokens ?? 30_000) * 4
+  const budgetTokens = opts.budgetTokens ?? 30_000
+  const budgetChars = budgetTokens * CHARS_PER_TOKEN
   const existing = file.rules.map(r => `- ${r.id} (${r.type}): ${r.text}`)
   const vocab = file.vocabulary.map(v => `- ${v.id}: ${v.text} = ${formatExpr(v.expr)}`)
   const header = [
@@ -90,19 +107,38 @@ export function buildInferPrompt(facts: Facts, file: RulesFile, opts: { area?: s
     '# Facts',
   ].filter(Boolean).join('\n')
 
+  if (header.length + MIN_ROOM_AFTER_HEADER > budgetChars) {
+    throw new Error(`the inference prompt budget (${budgetTokens} tokens) is too small for the instructions and schema (${Math.ceil(header.length / CHARS_PER_TOKEN)} tokens); raise --budget`)
+  }
+
+  // Room kept back for the notice that reports skipped sections; it is always available at the end.
+  const tail = SECTIONS_NOTICE.length + 1
+  const usable = budgetChars - tail
   const out = [header]
   let used = header.length
-  for (const section of condenseFacts(facts, opts)) {
+  const sections = condenseFacts(facts, opts)
+  for (let i = 0; i < sections.length; i++) {
+    const section = sections[i]!
+    // Room for this section's title and the notice that may follow its lines.
+    const reserve = sectionNotice(section.lines.length).length + 1
+    if (used + section.title.length + 1 + reserve > usable) {
+      out.push(SECTIONS_NOTICE)
+      break
+    }
     out.push(section.title)
     used += section.title.length + 1
     let shown = 0
     for (const line of section.lines) {
-      if (used + line.length + 1 > budgetChars) break
+      if (used + line.length + 1 + reserve > usable) break
       out.push(line)
       used += line.length + 1
       shown++
     }
-    if (shown < section.lines.length) out.push(`… ${section.lines.length - shown} more not shown; use --area <path> to narrow`)
+    if (shown < section.lines.length) {
+      const notice = sectionNotice(section.lines.length - shown)
+      out.push(notice)
+      used += notice.length + 1
+    }
   }
   return out.join('\n')
 }
