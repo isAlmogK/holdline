@@ -37,7 +37,29 @@ describe('applyMigrations', () => {
 
   it('lets the authenticated role use public tables (Supabase default privileges)', async () => {
     run = await runMigrations([{ path: 'm.sql', sql: 'create table public.t (id int);' }], 'supabase')
-    await run.db.exec('begin; set local role authenticated; select * from public.t; rollback;')
+    await expect(run.db.exec('begin; set local role authenticated; select * from public.t; rollback;')).resolves.toBeDefined()
+  })
+
+  it('puts extensions on the search_path for Supabase, so unqualified uuid_generate_v4() works', async () => {
+    run = await runMigrations([
+      { path: 'a.sql', sql: 'create table public.u (id uuid primary key default uuid_generate_v4());' },
+      { path: 'b.sql', sql: `select crypt('x', gen_salt('bf'));` },
+    ], 'supabase')
+    expect(run.failure).toBeUndefined()
+    const sp = await run.db.query<{ search_path: string }>('show search_path')
+    expect(sp.rows[0]!.search_path).toBe('"$user", public, extensions')
+  })
+
+  it('leaves the search_path alone for the plain dialect', async () => {
+    run = await runMigrations([], 'plain')
+    const sp = await run.db.query<{ search_path: string }>('show search_path')
+    expect(sp.rows[0]!.search_path).toBe('public') // PGlite's default
+  })
+
+  it('fails the authenticated-role check when privileges are missing', async () => {
+    run = await runMigrations([{ path: 'm.sql', sql: 'create table public.t (id int); revoke all on public.t from authenticated;' }], 'supabase')
+    await expect(run.db.exec('begin; set local role authenticated; select * from public.t;')).rejects.toThrow(/permission denied/)
+    await run.db.exec('rollback')
   })
 
   it('does not create the shim for the plain dialect', async () => {

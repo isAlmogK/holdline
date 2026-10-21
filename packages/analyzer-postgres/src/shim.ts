@@ -28,4 +28,5 @@ create table storage.objects (
   owner uuid,
   metadata jsonb
 );
+set search_path to "$user", public, extensions;
 `
