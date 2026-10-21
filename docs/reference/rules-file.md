@@ -418,6 +418,15 @@ How each atom is satisfied and then broken:
 
 Atoms are satisfied in three stages: plain atoms, then atoms with a lookup operand, then `exists` atoms, so the placeholders they refer to already have values. Generation reads the values earlier conditions already set: an operand that is already set keeps its value (`in`/`eq` read it before inventing one). Within a stage atoms are taken in order, so a few orderings still end in a visible skip (`cannot satisfy ...`, `conflicting conditions ...`), never in a wrong case. A `resource.*` or `incoming.*` field that only a lookup or `exists` path needs (`doc(/accounts/{resource.accountId}/members/{actor.uid}).role`, `exists(/orgs/{resource.orgId}/members/{actor.uid})`) gets a fresh `value-n`. A seeded Firestore document is unique per path: an `exists` doc and lookups on the same path merge into one seed entry with the fields combined (conflicting values are skipped as `conflicting conditions`). A lookup of the target document itself (`doc(/dogs/{param.dogId}).ownerId` on `/dogs/{dogId}`) writes to the record, so it reads the stored record like a `resource.*` operand. An `exists` of the target document (`exists(/dogs/{param.dogId})`) merges into the record seed the same way, so every path appears at most once in a case's `seed`; the record exists for every op but `create`, so that atom is never true on create (create is skipped) and cannot be denied alone on other ops.
 
+With facts (`generateTests(rule, vocab, facts)`), each op's allowed world also satisfies the store's real policy for
+that op, which can need more than the rule names (a create rule that also checks `status`, a select policy with
+`deleted_at is null`). The candidates are the target's policies for the op, in facts order. The first one that is only
+an `and` of atoms (after expanding the vocabulary) and that one world can satisfy together with the rule adds its
+other atoms to that op's atoms. With no such policy, or no facts, the op uses the rule's atoms alone. Deny cases are
+still one per rule atom, with the same names; the policy's extra atoms hold in every deny world. The per-op skips
+below look at the extra atoms too. `generatedFrom` hashes only the rule and vocabulary, so a test file reflects the
+facts it was generated with.
+
 A `deny` world is not the allowed world edited: it is solved again around the pin that falsifies the atom (pins on plain operands are applied first, pins on lookup operands with the lookup atoms), so documents and paths keyed on a pinned value follow it. The generator then evaluates every atom in the world and keeps it only if the broken atom is false and every other atom holds. Candidate pins are tried in order, first those no other atom reads or builds a path from. Breaking `authenticated` sets `as: null`, which also makes every atom that reads the actor false; that is not checked.
 
 ### When generation is skipped

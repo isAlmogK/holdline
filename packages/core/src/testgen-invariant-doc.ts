@@ -1,7 +1,6 @@
 import { FactIndex } from './fact-index.js'
-import type { Atom } from './expr.js'
 import type { Facts, Policy } from './facts.js'
-import { expand, flattenAnd } from './logic.js'
+import { andAtoms, expand } from './logic.js'
 import type { DataAccessRule, InvariantRule } from './rules.js'
 import type { TestCase, TestFile } from './testcase.js'
 import { toCase } from './testgen-case.js'
@@ -47,17 +46,16 @@ export function firestoreInvariantCases(rule: InvariantRule, facts: Facts | unde
 
 function otherPolicyAllows(denied: World, others: Policy[]): string | undefined {
   for (const other of others) {
-    const parts = flattenAnd(expand(other.condition, new Map()))
-    if (!parts.every((p): p is { atom: Atom } => 'atom' in p)) return `create policy ${other.id} cannot be evaluated`
-    if (parts.every(p => holds(denied, p.atom, 'create'))) return `another create policy allows it: ${other.id}`
+    const atoms = andAtoms(expand(other.condition, new Map()))
+    if (!atoms) return `create policy ${other.id} cannot be evaluated`
+    if (atoms.every(a => holds(denied, a, 'create'))) return `another create policy allows it: ${other.id}`
   }
   return undefined
 }
 
 function allowWorld(access: DataAccessRule, rule: InvariantRule): World | undefined {
-  const parts = flattenAnd(expand(access.requires, new Map()))
-  if (!parts.every((p): p is { atom: Atom } => 'atom' in p)) return undefined
-  const atoms = parts.map(p => p.atom)
+  const atoms = andAtoms(expand(access.requires, new Map()))
+  if (!atoms) return undefined
   const pins = rule.kind === 'enum' ? rule.columns.map(c => ({ operand: `incoming.${c}`, value: rule.values![0] })) : []
   try {
     const w = satisfy(atoms, access, { pins })
