@@ -1,15 +1,15 @@
 // Runs Firestore and Storage cases on the emulators (spec 5.3): in-process when they are already running,
 // otherwise inside `firebase emulators:exec` with a worker. Missing tools are infrastructure failures.
-import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { z } from 'zod'
 import { runFirebaseFiles, type FirebaseInput } from './firebase-runner.js'
+import { run, stopAll } from './processes.js'
 import { CaseResultSchema, type CaseResult } from './report.js'
 
 export const FIREBASE_INSTALL_HINT =
@@ -24,6 +24,7 @@ export function toolsMissing(infra: string): boolean {
 }
 
 export type EmulatorOutcome = { results: Record<string, CaseResult[]> } | { infra: string }
+export type EmulatorOptions = { timeoutMs?: number }
 
 const TIMEOUT_MS = 180_000
 const TAIL_LINES = 15
@@ -32,31 +33,6 @@ const DENY_ALL = {
   storage: "rules_version = '2';\nservice firebase.storage { match /b/{bucket}/o { match /{object=**} { allow read, write: if false; } } }\n",
 }
 const ResultsSchema = z.record(z.string(), z.array(CaseResultSchema))
-
-type Exit = { code: number | null; output: string; missing: boolean; timedOut: boolean }
-
-function run(command: string, args: string[], env: NodeJS.ProcessEnv, cwd?: string, timeout?: number): Promise<Exit> {
-  return new Promise(resolve => {
-    // Its own process group, so a timeout also stops the emulators it started.
-    const child = spawn(command, args, { env, cwd, detached: timeout !== undefined, stdio: ['ignore', 'pipe', 'pipe'] })
-    let output = ''
-    let timedOut = false
-    const collect = (chunk: Buffer) => { output += chunk.toString() }
-    child.stdout.on('data', collect)
-    child.stderr.on('data', collect)
-    const kill = (signal: NodeJS.Signals) => { try { process.kill(-child.pid!, signal) } catch { /* already gone */ } }
-    const timer = timeout === undefined ? undefined : setTimeout(() => {
-      timedOut = true
-      kill('SIGTERM')
-      setTimeout(() => kill('SIGKILL'), 5_000).unref()
-    }, timeout)
-    child.on('error', e => {
-      clearTimeout(timer)
-      resolve({ code: null, output: output + e.message, missing: (e as NodeJS.ErrnoException).code === 'ENOENT', timedOut })
-    })
-    child.on('close', code => { clearTimeout(timer); resolve({ code, output, missing: false, timedOut }) })
-  })
-}
 
 async function freePorts(n: number): Promise<number[]> {
   const servers = await Promise.all(Array.from({ length: n }, () => new Promise<ReturnType<typeof createServer>>((resolve, reject) => {
@@ -104,8 +80,9 @@ async function prepare(dir: string, input: FirebaseInput): Promise<void> {
   await writeFile(join(dir, 'input.json'), JSON.stringify(input))
 }
 
-async function exec(input: FirebaseInput, env: NodeJS.ProcessEnv): Promise<EmulatorOutcome> {
+async function exec(input: FirebaseInput, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<EmulatorOutcome> {
   const dir = await mkdtemp(join(tmpdir(), 'holdline-emulator-'))
+  let cli: number | undefined
   try {
     await prepare(dir, input)
     const outPath = join(dir, 'out.json')
@@ -115,8 +92,9 @@ async function exec(input: FirebaseInput, env: NodeJS.ProcessEnv): Promise<Emula
     // which crashes another suite's next upload) and the hub locator. A private TMPDIR keeps each run's own.
     const tmp = join(dir, 'tmp')
     await mkdir(tmp)
-    const exit = await run('firebase', args, { ...env, TMPDIR: tmp }, dir, TIMEOUT_MS)
-    if (exit.timedOut) return { infra: `the Firebase emulator run timed out after ${TIMEOUT_MS / 1000} s: ${tail(exit.output)}` }
+    const exit = await run('firebase', args, { ...env, TMPDIR: tmp }, { cwd: dir, timeout: timeoutMs, marker: basename(dir) })
+    cli = exit.pid
+    if (exit.timedOut) return { infra: `the Firebase emulator run timed out after ${timeoutMs / 1000} s: ${tail(exit.output)}` }
     if (existsSync(outPath)) {
       const text = await readFile(outPath, 'utf8')
       let raw: unknown
@@ -128,13 +106,15 @@ async function exec(input: FirebaseInput, env: NodeJS.ProcessEnv): Promise<Emula
     const hint = /java/i.test(exit.output) ? `\n${FIREBASE_INSTALL_HINT}` : ''
     return { infra: `the Firebase emulator did not start: ${tail(exit.output)}${hint}` }
   } finally {
+    // However the run ended (a CLI that crashed leaves the Firestore JVM running), nothing it started outlives it.
+    if (cli !== undefined) await stopAll(cli, basename(dir))
     await rm(dir, { recursive: true, force: true })
   }
 }
 
 // `env` is used for the emulator-variable check, the tool probes and the spawn. In-process runs read
 // process.env (as @firebase/rules-unit-testing does).
-export async function runOnEmulator(input: FirebaseInput, env: NodeJS.ProcessEnv = process.env): Promise<EmulatorOutcome> {
+export async function runOnEmulator(input: FirebaseInput, env: NodeJS.ProcessEnv = process.env, options: EmulatorOptions = {}): Promise<EmulatorOutcome> {
   const needsStorage = input.files.some(f => f.store === 'storage')
   if (env.FIRESTORE_EMULATOR_HOST && (!needsStorage || env.FIREBASE_STORAGE_EMULATOR_HOST)) {
     try {
@@ -145,5 +125,5 @@ export async function runOnEmulator(input: FirebaseInput, env: NodeJS.ProcessEnv
   }
   if ((await run('firebase', ['--version'], env)).missing) return { infra: `firebase-tools is not installed: ${FIREBASE_INSTALL_HINT}` }
   if ((await run('java', ['-version'], env)).missing) return { infra: `Java is not installed: ${FIREBASE_INSTALL_HINT}` }
-  return exec(input, env)
+  return exec(input, env, options.timeoutMs ?? TIMEOUT_MS)
 }
