@@ -1,0 +1,13 @@
+diff --git a/firestore.rules b/firestore.rules
+index 15b5660..c11422a 100644
+--- a/firestore.rules
++++ b/firestore.rules
+@@ -21,7 +21,7 @@ service cloud.firestore {
+     }
+ 
+     match /users/{uid} {
+-      allow read: if signedIn() && request.auth.uid == uid;
++      allow read: if signedIn();
+     }
+ 
+     match /orgs/{orgId} {
