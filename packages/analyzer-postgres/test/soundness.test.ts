@@ -2,19 +2,13 @@ import type { Expr, Op, Policy } from '@holdline/core'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { factsFromDatabase } from '../src/facts.js'
 import { runMigrations, type MigrationRun } from '../src/migrate.js'
-import { evaluate, type Row, type World } from './helpers/model.js'
+import { evaluate } from './helpers/model.js'
+import { sqlAllows } from './helpers/sql-allows.js'
+import { samples, U1 } from './helpers/worlds.js'
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 // Spec 9: in every sampled world, if real Postgres allows the request, the analyzer's condition is true.
-
-const U1 = '00000000-0000-0000-0000-0000000000a1'
-const U2 = '00000000-0000-0000-0000-0000000000a2'
-const O1 = '00000000-0000-0000-0000-0000000000b1'
-const O2 = '00000000-0000-0000-0000-0000000000b2'
-const DOC = '00000000-0000-0000-0000-0000000000c1'
-// The claims Supabase's anon key carries: the model's anonymous caller (actor null) still has these in SQL.
-const ANON_KEY = { role: 'anon', iss: 'supabase', ref: 'demo', iat: 1700000000, exp: 2000000000 }
 
 const SCHEMA = `
 create role editors; grant editors to authenticated with inherit true;
@@ -26,78 +20,12 @@ create function public.is_member(o uuid) returns boolean language sql stable sec
   as $$ select exists (select 1 from public.members m where m.org_id = o and m.user_id = (select auth.uid())) $$;
 `
 
-// A world for the model, and the claims SQL sees (the anon key's, or none, for an anonymous caller).
-interface Sample { world: World; jwt: Record<string, unknown> | null }
-
-// A small deterministic generator (mulberry32), so failures reproduce.
-function rng(seed: number) {
-  let s = seed >>> 0
-  return <T>(xs: readonly T[]): T => {
-    s = (s + 0x6d2b79f5) >>> 0
-    let t = Math.imul(s ^ (s >>> 15), 1 | s)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return xs[((t ^ (t >>> 14)) >>> 0) % xs.length]!
-  }
-}
-
-function samples(count: number, seed: number): Sample[] {
-  const pick = rng(seed)
-  const doc = (): Row => ({
-    id: DOC, org_id: pick([O1, O2, null]), owner_id: pick([U1, U2, null]),
-    status: pick(['a', 'b', 'draft', 'submitted', null]), n: pick([0, 5, null]),
-    deleted_at: pick([null, '2026-01-01T00:00:00+00:00']),
-  })
-  const membership = [{ org_id: O1, user_id: U1, role: 'admin' }, { org_id: O2, user_id: U2, role: 'member' }, { org_id: O1, user_id: U2, role: 'member' }]
-  return Array.from({ length: count }, () => {
-    const uid = pick([null, U1, U2])
-    const extra = pick([{}, { user_role: 'admin' }, { app_metadata: { tier: 'gold' } }])
-    const actor = uid === null ? null : { uid, claims: { sub: uid, role: 'authenticated', aud: 'authenticated', ...extra } }
-    const world: World = {
-      actor, resource: doc(), incoming: doc(),
-      tables: { 'public.members': membership.filter(() => pick([true, false])) },
-    }
-    return { world, jwt: actor ? actor.claims : pick([null, ANON_KEY]) }
-  })
-}
-
 let run: MigrationRun
 beforeAll(async () => {
   run = await runMigrations([{ path: 'schema.sql', sql: SCHEMA }], 'supabase')
   if (run.failure) throw new Error(run.failure.message)
 })
 afterAll(async () => { await run?.db.close() }) // undefined when beforeAll failed
-
-const COLUMNS = ['id', 'org_id', 'owner_id', 'status', 'n', 'deleted_at'] as const
-const values = (r: Row) => COLUMNS.map(c => r[c] ?? null)
-
-// What real Postgres does for this sample and op, as the anon or authenticated role.
-async function sqlAllows({ world: w, jwt }: Sample, op: Op): Promise<boolean> {
-  const db = run.db
-  await db.exec('begin')
-  try {
-    for (const m of w.tables['public.members'] ?? []) {
-      await db.query('insert into public.members values ($1, $2, $3)', [m.org_id, m.user_id, m.role])
-    }
-    if (op !== 'create') await db.query('insert into public.docs values ($1, $2, $3, $4, $5, $6)', values(w.resource!))
-    await db.query(`select set_config('request.jwt.claims', $1, true)`, [jwt ? JSON.stringify(jwt) : ''])
-    await db.exec(`set local role ${w.actor ? 'authenticated' : 'anon'}`)
-    try {
-      if (op === 'read') return (await db.query('select 1 from public.docs where id = $1', [DOC])).rows.length === 1
-      if (op === 'create') { await db.query('insert into public.docs values ($1, $2, $3, $4, $5, $6)', values(w.incoming!)); return true }
-      if (op === 'update') {
-        const [, ...rest] = values(w.incoming!)
-        const r = await db.query('update public.docs set org_id = $2, owner_id = $3, status = $4, n = $5, deleted_at = $6 where id = $1', [DOC, ...rest])
-        return r.affectedRows === 1
-      }
-      return (await db.query('delete from public.docs where id = $1', [DOC])).affectedRows === 1
-    } catch (e) {
-      if ((e as { code?: string }).code === '42501') return false // new row violates row-level security policy
-      throw e
-    }
-  } finally {
-    await db.exec('rollback')
-  }
-}
 
 function hasOpaque(e: Expr): boolean {
   if ('and' in e) return e.and.some(hasOpaque)
@@ -130,7 +58,7 @@ async function checkSound(policiesSql: string, op: Op, seed: number, opts: { ano
     let denied = 0
     let anonKeyAllowed = 0
     for (const s of samples(COUNT[op], seed)) {
-      const sql = await sqlAllows(s, op)
+      const sql = await sqlAllows(run.db, s, op)
       if (sql) allowed++; else denied++
       if (sql && !s.world.actor && s.jwt) anonKeyAllowed++
       if (sql) expect(evaluate(condition, s.world), `SQL allowed but Expr false: ${JSON.stringify({ s, condition })}`).toBe(true)
