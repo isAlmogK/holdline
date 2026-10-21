@@ -41,8 +41,9 @@ Reference docs (keep true when a contract changes): [docs/reference/facts.md](do
 
 ## Adding an analyzer
 
-A package under `packages/analyzer-*` depends only on `@holdline/core`. It is registered by one import and one array
-entry in `packages/cli/src/analyzers.ts`. Its settings come from its own section of `.holdline/config.yaml`
+A package under `packages/analyzer-*` depends, among workspace packages, only on `@holdline/core` (it brings its own
+third-party libraries); `packages/testkit` may also use `packages/analyzer-postgres`. It is registered by one import
+and one array entry in `packages/cli/src/analyzers.ts`. Its settings come from its own section of `.holdline/config.yaml`
 (`AnalyzerContext.config`, see [docs/reference/facts.md](docs/reference/facts.md)).
 
 ## Golden apps
