@@ -18,6 +18,8 @@ export function nameList(list: SqlNode[] | undefined): string[] {
 
 const NUMERIC = new Set(['int2', 'int4', 'int8', 'integer', 'bigint', 'smallint', 'numeric', 'decimal', 'float4', 'float8', 'real'])
 
+const TEXTUAL = new Set(['text', 'varchar', 'bpchar', 'char', 'name'])
+
 // A constant, with a cast around it applied the way Postgres would for the values we can model:
 // numbers parse, uuids lowercase, other string casts keep the string. A boolean cast of a string is not read.
 export function constant(node: SqlNode | undefined): { value: Literal } | undefined {
@@ -26,8 +28,13 @@ export function constant(node: SqlNode | undefined): { value: Literal } | undefi
   const [kind, f] = k
   if (kind === 'TypeCast') {
     const inner = constant(f.arg)
-    if (!inner || typeof inner.value !== 'string') return inner
+    if (!inner) return inner
     const type = nameList(f.typeName?.names).at(-1) ?? ''
+    if (typeof inner.value === 'number' && TEXTUAL.has(type)) {
+      const raw = kindOf(f.arg)?.[1].fval?.fval as string | undefined // keep `1.50` as written
+      return { value: raw ?? String(inner.value) }
+    }
+    if (typeof inner.value !== 'string') return inner
     if (NUMERIC.has(type)) {
       const n = Number(inner.value)
       return inner.value.trim() !== '' && Number.isFinite(n) ? { value: n } : undefined
