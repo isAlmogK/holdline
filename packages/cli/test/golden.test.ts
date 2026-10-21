@@ -39,6 +39,19 @@ describe('golden-ts-postgres', () => {
     }
   })
 
+  it('turns every selector and data rule unknown when any file failed to parse', async () => {
+    const root = await goldenProject()
+    const facts = JSON.parse(await readFile(join(root, 'facts.json'), 'utf8'))
+    facts.diagnostics = [...(facts.diagnostics ?? []), { analyzer: 'ts', file: 'src/routes/import.ts', message: 'parse error', severity: 'error' }]
+    await writeFile(join(root, 'facts.json'), JSON.stringify(facts))
+    const out = await runCli(['check', '--facts', 'facts.json', '--format', 'json'], { cwd: root })
+    const parsed = JSON.parse(out.stdout)
+    expect(parsed.summary.unknown).toBe(12)
+    expect(parsed.results.every((r: { status: string }) => r.status === 'unknown')).toBe(true)
+    expect(out.code).toBe(0)
+    expect((await runCli(['check', '--facts', 'facts.json', '--strict'], { cwd: root })).code).toBe(1)
+  })
+
   const breakages = readdirSync(join(golden, 'fixtures/breakages'))
   it('has one breakage per rule', () => {
     expect(breakages.sort()).toEqual(Array.from({ length: 12 }, (_, i) => `R-${String(i + 1).padStart(3, '0')}.json`))

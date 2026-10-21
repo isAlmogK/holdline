@@ -210,10 +210,42 @@ describe('unreadable dependencies', () => {
   it('is unknown when an analyzer crashed (empty file)', () => {
     expect(run({ policies: [policy], diagnostics: [err('')] }, file([rule]))[0]!.status).toBe('unknown')
   })
-  it('stays pass for an error in an unrelated file', () => {
+  it('stays pass for an error in an unrelated file (symbol target)', () => {
+    const access = { id: 'R-001', text: 't', type: 'access', target: { symbol: 'h' }, requires: auth }
+    const facts = { guards: [{ at: 'h', requires: auth }], symbols: [{ id: 'h', kind: 'function', lang: 'ts', location: { file: 'src/a.ts', line: 1 } }], diagnostics: [err('src/other.ts')] }
+    expect(run(facts, file([access]))[0]!.status).toBe('pass')
+  })
+  it('is unknown for a symbol target when its own file has an error', () => {
+    const access = { id: 'R-001', text: 't', type: 'access', target: { symbol: 'h' }, requires: auth }
+    const facts = { guards: [{ at: 'h', requires: auth }], symbols: [{ id: 'h', kind: 'function', lang: 'ts', location: { file: 'src/a.ts', line: 1 } }], diagnostics: [err('src/a.ts')] }
+    expect(run(facts, file([access]))[0]).toMatchObject({ status: 'unknown', message: 'src/a.ts could not be read (parse error), so this rule cannot be checked.' })
+  })
+  it('is unknown for a route selector when any file has an error', () => {
     const routes = [{ id: 'route:GET /a', method: 'GET', path: '/a', handler: 'h', framework: 'x' }]
     const access = { id: 'R-001', text: 't', type: 'access', target: { routes: 'GET /a' }, requires: auth }
-    const facts = { routes, guards: [{ at: 'h', requires: auth }], symbols: [{ id: 'h', kind: 'function', lang: 'ts', location: { file: 'src/a.ts', line: 1 } }], diagnostics: [err('src/other.ts')] }
-    expect(run(facts, file([access]))[0]!.status).toBe('pass')
+    const facts = { routes, guards: [{ at: 'h', requires: auth }], symbols: [{ id: 'h', kind: 'function', lang: 'ts', location: { file: 'src/a.ts', line: 1 } }], diagnostics: [err('src/other.ts'), err('src/third.ts')] }
+    expect(run(facts, file([access]))[0]).toMatchObject({
+      status: 'unknown',
+      message: 'analyzer errors make this result unreliable: src/other.ts: parse error (+1 more)',
+    })
+  })
+  it('names the analyzer when it crashed, for set-quantified rules', () => {
+    expect(run({ policies: [policy], diagnostics: [err('')] }, file([rule]))[0]!.message)
+      .toBe('analyzer errors make this result unreliable: a: parse error')
+  })
+  it('flow, visibility and postgres invariant rules are unknown for an error in a .py migration', () => {
+    const dogs = { store: 'postgres', table: 'dogs' }
+    const facts = {
+      tables: [{ id: 'pg:public.dogs', name: 'public.dogs', columns: [{ name: 'team_id', type: 'uuid', nullable: false }], location: { file: 'db/schema.sql', line: 1 } }],
+      dataOps: [{ in: 'repo:Dogs.list', store: 'postgres', target: 'public.dogs', op: 'list', filters: notDeleted, evidence: { file: 'src/repo.ts', line: 2 } }],
+      symbols: [{ id: 'repo:Dogs.list', kind: 'method', lang: 'ts', location: { file: 'src/repo.ts', line: 2 } }],
+      diagnostics: [err('migrations/0002_add_dogs.py')],
+    }
+    const rules = [
+      { id: 'R-001', text: 'flow', type: 'flow', target: dogs, ops: ['update'], via: ['svc:Transfer'] },
+      { id: 'R-002', text: 'visibility', type: 'visibility', target: dogs, requires: notDeleted },
+      { id: 'R-003', text: 'invariant', type: 'invariant', target: dogs, kind: 'not-null', columns: ['team_id'] },
+    ]
+    expect(run(facts, file(rules)).map(r => r.status)).toEqual(['unknown', 'unknown', 'unknown'])
   })
 })

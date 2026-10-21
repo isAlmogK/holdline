@@ -283,15 +283,18 @@ not `METHOD /path` or `route:<id>` throws.
 ## Diagnostics and `unknown`
 
 A diagnostic with severity `error` means facts may be missing. `checkRule` then reports `unknown` (instead of
-pass, violation or stale) when an error touches the rule:
+pass, violation or stale). Which rules it touches depends on the target (Phase 0 rule, conservative; to be refined
+per store later):
 
-| Trigger | Message |
-|---|---|
-| An error with `file: ''` (the analyzer crashed or returned invalid facts) | The `<analyzer>` analyzer failed |
-| The rule's `evidence` includes an id that is not in the facts, while errors exist | Evidence ... not found |
-| An error in a file the rule depends on: the files of its target route, handler, middleware, symbol, table, matching policies and matching dataOps (`evidence.file` and the `in` symbol's file), plus the files of its `evidence` ids | `<file>` could not be read |
-| Firestore or Storage target and any error in a `.rules` file | same |
-| Postgres target and any error in a `.sql` file | same |
+| Rule | Becomes `unknown` when | Message |
+|---|---|---|
+| `access` with a `{ symbol }` target | An error with `file: ''` (the analyzer crashed or returned invalid facts) | The `<analyzer>` analyzer failed |
+| | The rule's `evidence` includes an id that is not in the facts, while errors exist | Evidence ... not found |
+| | An error in the symbol's file or in the file of one of its `evidence` ids | `<file>` could not be read |
+| Every other rule: `access` with a `routes` selector, `data-access`, `visibility`, `flow`, `invariant` | Any error diagnostic at all, in any file | `analyzer errors make this result unreliable: <file, or the analyzer name when file is ''>: <message> (+N more)` (the `(+N more)` part only when there are more errors) |
+
+The second row is deliberately broad: these rules quantify over sets (matching routes, policies, data ops, tables),
+and a file that failed to parse removes facts from that set, so the rule could pass on facts that are missing.
 
 `unapproved-edit` takes precedence over `unknown`. Warnings never change a result.
 
@@ -325,8 +328,9 @@ part with one diagnostic `{ analyzer, file: '', severity: 'error', message }`:
 | `analyze` returns facts that fail the schema | `invalid facts:` followed by the zod error |
 
 Analyzers whose `detect` returns false are skipped and not listed in `ran`. For problems with a single file, an
-analyzer should emit a diagnostic with that file's path and keep going, so only the rules that depend on that
-file become `unknown`.
+analyzer should emit a diagnostic with that file's path and keep going. Today any error diagnostic makes every
+set-quantified rule `unknown`, and a `symbol`-target access rule only when the error is in its own file or its
+evidence's files (see "Diagnostics and `unknown`").
 
 ## Conventions for fixtures and analyzers
 
