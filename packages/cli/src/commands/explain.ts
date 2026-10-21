@@ -2,7 +2,7 @@ import { FactIndex, checkRule, formatExpr, hashRule, vocabularyMap } from '@hold
 import YAML from 'yaml'
 import { UsageError, type Io } from '../io.js'
 import { loadFacts, loadRules } from '../workspace.js'
-import { where } from '../format/human.js'
+import { where } from '../format/where.js'
 
 export async function explainCommand(id: string, opts: { facts?: string }, io: Io): Promise<number> {
   const file = await loadRules(io.cwd)
@@ -23,8 +23,12 @@ export async function explainCommand(id: string, opts: { facts?: string }, io: I
     const at = index.at(ev)
     lines.push(`evidence: ${ev}${at.file ? ` (${at.file}${at.line ? `:${at.line}` : ''})` : ''}`)
   }
-  for (const r of checkRule(rule, { index, vocab: vocabularyMap(file) })) {
-    lines.push(`${r.status}: ${r.message}${where(r) ? ` at ${where(r)}` : ''}`)
+  if (rule.status === 'muted') {
+    lines.push('muted, not enforced')
+  } else {
+    for (const r of checkRule(rule, { index, vocab: vocabularyMap(file) })) {
+      lines.push(`${r.status}: ${r.message}${where(r) ? ` at ${where(r)}` : ''}`)
+    }
   }
   lines.push('', YAML.stringify(rule, { lineWidth: 0 }).trimEnd())
   io.stdout(`${lines.join('\n')}\n`)
