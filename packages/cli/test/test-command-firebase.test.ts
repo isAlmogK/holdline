@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { generateTests, parseRulesFile, serializeTestFile, vocabularyMap } from '@holdline/core'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { announceSkip } from '../../testkit/test/helpers.js'
+import { skipReason } from '../../testkit/test/helpers.js'
 import { copyFixture, failedCases, runTestCommand as run, type Edit } from './helpers/fixture.js'
 import { runCli } from './helpers/project.js'
 
@@ -11,7 +11,7 @@ type Report = { files: { rule: string; cases: { passed: boolean }[] }[]; infrast
 
 const EMULATOR = 240_000
 
-// The clean run decides whether the emulators can run here; without them every test skips with the reason.
+// The clean run decides whether the emulators can run here; without the tools every test skips with the reason.
 describe('@emulator holdline test on firestore and storage', () => {
   let clean: Run
   let infra: string | undefined
@@ -19,8 +19,8 @@ describe('@emulator holdline test on firestore and storage', () => {
     clean = await run('test-fb')
     const report = JSON.parse(clean.stdout) as Report
     const down = report.infrastructure.find(i => i.store === 'firestore' || i.store === 'storage')
-    infra = down?.message
-    announceSkip(infra === undefined ? { results: undefined } : { infra })
+    // Skips only when firebase-tools or Java is missing; any other failure fails the suite here.
+    infra = down === undefined ? undefined : skipReason({ infra: down.message })
   }, EMULATOR)
 
   const red = async (ctx: { skip: (note?: string) => void }, edits: Edit[]) => {

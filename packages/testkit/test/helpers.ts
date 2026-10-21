@@ -1,6 +1,7 @@
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { toolsMissing } from '../src/emulator.js'
 
 // A temp project directory holding the given files (path → content).
 export async function project(files: Record<string, string>): Promise<string> {
@@ -15,13 +16,20 @@ export async function project(files: Record<string, string>): Promise<string> {
 // PGlite boots a WASM Postgres per test; allow for parallel-suite load.
 export const SLOW = 30_000
 
-// Shared by every @emulator suite: say once, on stderr (the default reporter hides console output of
-// skipped tests), why the suite is skipped, and skip each test with the reason for verbose and CI reporters.
+// Shared by every @emulator suite. A suite skips only when the tools are missing (`toolsMissing`): it says why once,
+// on stderr (the default reporter hides console output of skipped tests), and each test skips with the reason for
+// verbose and CI reporters. Any other infrastructure failure fails the suite with its message.
 type Outcome<T> = { results: T } | { infra: string }
-export function announceSkip(outcome: Outcome<unknown>): void {
-  if ('infra' in outcome) process.stderr.write(`@emulator tests skipped: ${outcome.infra}\n`)
+export function skipReason(outcome: Outcome<unknown>): string | undefined {
+  if (!('infra' in outcome)) return undefined
+  if (!toolsMissing(outcome.infra)) throw new Error(`the Firebase emulator could not run the suite: ${outcome.infra}`)
+  process.stderr.write(`@emulator tests skipped: ${outcome.infra}\n`)
+  return outcome.infra
 }
 export function resultsOrSkip<T>(outcome: Outcome<T>, ctx: { skip: (note?: string) => void }): T {
-  if ('infra' in outcome) { ctx.skip(outcome.infra); throw new Error('unreachable') }
+  if ('infra' in outcome) {
+    if (toolsMissing(outcome.infra)) ctx.skip(outcome.infra)
+    throw new Error(`the Firebase emulator could not run the suite: ${outcome.infra}`)
+  }
   return outcome.results
 }

@@ -15,6 +15,14 @@ import { CaseResultSchema, type CaseResult } from './report.js'
 export const FIREBASE_INSTALL_HINT =
   'install firebase-tools (npm install -g firebase-tools) and a JDK 21 or later, or start the emulators yourself and set FIRESTORE_EMULATOR_HOST and FIREBASE_STORAGE_EMULATOR_HOST'
 
+// True when an infrastructure message says the tools are missing: no firebase-tools, no Java, or an emulator that
+// did not start because the Java version is too old. Every other message is a real failure. The @emulator test
+// suites skip only on these.
+export function toolsMissing(infra: string): boolean {
+  if (infra.startsWith('firebase-tools is not installed') || infra.startsWith('Java is not installed')) return true
+  return infra.startsWith('the Firebase emulator did not start:') && /\bJava version\b/i.test(infra)
+}
+
 export type EmulatorOutcome = { results: Record<string, CaseResult[]> } | { infra: string }
 
 const TIMEOUT_MS = 180_000

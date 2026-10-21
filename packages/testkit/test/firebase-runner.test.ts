@@ -2,7 +2,7 @@ import type { DataStore, TestCase, TestFile } from '@holdline/core'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { runOnEmulator } from '../src/emulator.js'
 import type { FirebaseInput } from '../src/firebase-runner.js'
-import { announceSkip, resultsOrSkip } from './helpers.js'
+import { resultsOrSkip, skipReason } from './helpers.js'
 
 const firestoreRules = `rules_version = '2';
 service cloud.firestore {
@@ -96,7 +96,7 @@ describe('@emulator firebase runner', () => {
   let outcome: Awaited<ReturnType<typeof runOnEmulator>>
   beforeAll(async () => {
     outcome = await runOnEmulator(input)
-    announceSkip(outcome)
+    skipReason(outcome)
   }, 240_000)
   const results = (ctx: { skip: (note?: string) => void }) => resultsOrSkip(outcome, ctx)
 

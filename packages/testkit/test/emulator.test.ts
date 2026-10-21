@@ -2,7 +2,7 @@ import { mkdtemp, writeFile, chmod } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { FIREBASE_INSTALL_HINT, runOnEmulator } from '../src/emulator.js'
+import { FIREBASE_INSTALL_HINT, runOnEmulator, toolsMissing } from '../src/emulator.js'
 import { toMetadata } from '../src/firebase-ops.js'
 
 // A directory holding fake executables (name → shell script body).
@@ -41,6 +41,24 @@ describe('runOnEmulator', () => {
     })
     const r = await runOnEmulator({ firestoreRules: 'x', files: [] }, { PATH: dir })
     expect(r).toEqual({ infra: 'the Firebase emulator did not start: port taken' })
+  })
+})
+
+describe('toolsMissing', () => {
+  it('is true only when firebase-tools or a usable Java is missing', () => {
+    expect(toolsMissing(`firebase-tools is not installed: ${FIREBASE_INSTALL_HINT}`)).toBe(true)
+    expect(toolsMissing(`Java is not installed: ${FIREBASE_INSTALL_HINT}`)).toBe(true)
+    expect(toolsMissing(`the Firebase emulator did not start: starting\nfirebase-tools no longer supports Java version before 21\n${FIREBASE_INSTALL_HINT}`)).toBe(true)
+  })
+  it('is false for every other infrastructure failure', () => {
+    expect(toolsMissing('the Firebase emulator did not start: port taken')).toBe(false)
+    // The hint alone (added whenever the output mentions Java) does not say the Java version is wrong.
+    expect(toolsMissing(`the Firebase emulator did not start: java.lang.OutOfMemoryError\n${FIREBASE_INSTALL_HINT}`)).toBe(false)
+    expect(toolsMissing('the Firebase emulator run timed out after 180 s: ...')).toBe(false)
+    expect(toolsMissing('the Firebase worker wrote an invalid result: ...')).toBe(false)
+    expect(toolsMissing('the emulator worker returned no results for R-001')).toBe(false)
+    expect(toolsMissing('the Firebase emulator could not be used: ECONNREFUSED')).toBe(false)
+    expect(toolsMissing('no firestore rules file found')).toBe(false)
   })
 })
 
