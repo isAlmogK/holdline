@@ -1,10 +1,13 @@
 import YAML from 'yaml'
 import { z } from 'zod'
 import { deepEqual } from './canonical.js'
-import { hashRule } from './hash.js'
+import { hashRule, hashVocabulary } from './hash.js'
 import { collectRefs } from './logic.js'
 import { ruleKey, type ProposalReport } from './proposals.js'
-import { ProposedRuleSchema, RuleSchema, VocabularyEntrySchema, nextRuleId, validateRuleSemantics, vocabularyMap, type Rule, type RulesFile, type VocabularyEntry } from './rules.js'
+import {
+  ProposedRuleSchema, ProposedVocabularySchema, RuleSchema, nextRuleId, validateRuleSemantics, vocabularyMap,
+  type ProposedVocabulary, type Rule, type RulesFile, type VocabularyEntry,
+} from './rules.js'
 
 const PendingRuleSchema = z.strictObject({
   key: z.string().regex(/^P-\d+$/),
@@ -15,7 +18,7 @@ const PendingRuleSchema = z.strictObject({
 
 export const PendingFileSchema = z.strictObject({
   version: z.literal(1),
-  vocabulary: z.array(VocabularyEntrySchema).default([]),
+  vocabulary: z.array(ProposedVocabularySchema).default([]),
   rules: z.array(PendingRuleSchema).default([]),
 })
 
@@ -45,7 +48,7 @@ export function addToPending(
   const conflicts: PendingConflict[] = []
   const pendingVocab = new Map(pending.vocabulary.map(v => [v.id, v]))
   const clashing = new Set<string>()
-  const newVocab: VocabularyEntry[] = []
+  const newVocab: ProposedVocabulary[] = []
   for (const v of report.vocabulary) {
     if (!v.accepted) continue
     const entry = v.entry!
@@ -75,7 +78,9 @@ export function approve(
   file: RulesFile, pending: PendingFile, keys: string[] | 'all', approval: { by: string; at: string },
 ): { file: RulesFile; pending: PendingFile; approved: { key: string; id: string }[] } {
   const wanted = [...new Set(keys === 'all' ? pending.rules.map(r => r.key) : keys)]
-  const unknown = wanted.filter(k => !pending.rules.some(r => r.key === k) && !file.rules.some(r => r.id === k))
+  const known = (k: string) => pending.rules.some(r => r.key === k) || file.rules.some(r => r.id === k)
+    || (k.startsWith('vocabulary:') && file.vocabulary.some(v => v.id === k.slice('vocabulary:'.length)))
+  const unknown = wanted.filter(k => !known(k))
   if (unknown.length > 0) throw new Error(`nothing pending or approved with key ${unknown.join(', ')}`)
 
   const approvedVocab = new Set(file.vocabulary.map(v => v.id))
@@ -87,8 +92,15 @@ export function approve(
   // Pending vocabulary ids never clash with approved ones (validateProposals rejects clashes).
   const vocab = vocabularyMap(file, pending.vocabulary)
   const stamp = (rule: Rule): Rule => { const { muted: _m, ...rest } = rule; return { ...rest, status: 'approved', approved: { ...approval, hash: hashRule(rule, vocab) } } }
+  const stampVocab = (v: ProposedVocabulary): VocabularyEntry => ({ ...v, approved: { ...approval, hash: hashVocabulary(v) } })
 
   for (const key of wanted) {
+    if (key.startsWith('vocabulary:')) {
+      const id = key.slice('vocabulary:'.length)
+      next.vocabulary = next.vocabulary.map(v => (v.id === id ? stampVocab(v) : v))
+      approved.push({ key, id: key })
+      continue
+    }
     const existingIndex = next.rules.findIndex(r => r.id === key)
     if (existingIndex >= 0) {
       next.rules[existingIndex] = stamp(next.rules[existingIndex]!)
@@ -104,7 +116,7 @@ export function approve(
   }
 
   const needed = keys === 'all' ? new Set(pending.vocabulary.map(v => v.id)) : vocabularyNeeded(next.rules, pending)
-  next = { ...next, vocabulary: [...next.vocabulary, ...pending.vocabulary.filter(v => needed.has(v.id))] }
+  next = { ...next, vocabulary: [...next.vocabulary, ...pending.vocabulary.filter(v => needed.has(v.id)).map(stampVocab)] }
   const done = new Set(approved.map(a => a.key))
   return {
     file: next,

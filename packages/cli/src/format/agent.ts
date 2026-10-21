@@ -22,7 +22,8 @@ export function formatAgent(results: Result[], summary: Summary, texts: Map<stri
   ]
   for (const r of failing) {
     if (r.status === 'unapproved-edit') {
-      lines.push(`- ${r.rule} "${texts.get(r.rule) ?? ''}": this rule was changed in holdline.rules without approval. Undo your change to it; only the user approves rule changes (they can run holdline approve ${r.rule}).`)
+      const what = r.rule.startsWith('vocabulary:') ? 'vocabulary entry' : 'rule'
+      lines.push(`- ${r.rule} "${texts.get(r.rule) ?? ''}": this ${what} was changed in holdline.rules without approval. Undo your change to it; only the user approves rule changes (they can run holdline approve ${r.rule}).`)
       continue
     }
     const loc = where(r) ? ` at ${where(r)}` : ''

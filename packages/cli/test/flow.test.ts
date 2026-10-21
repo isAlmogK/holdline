@@ -1,4 +1,4 @@
-import { readFile, readdir } from 'node:fs/promises'
+import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { makeProject, runCli } from './helpers/project.js'
@@ -77,6 +77,31 @@ describe('inference flow', () => {
     const check = await runCli(['check', '--facts', 'facts.json'], { cwd: root })
     expect(check.code).toBe(1)
     expect(check.stdout).toContain('POST /dogs/:id/archive does not check staff')
+  })
+
+  it('an edited approved vocabulary entry fails check until approve vocabulary:<id>', async () => {
+    const root = await makeProject({ 'facts.json': facts, 'proposals.json': proposals })
+    await runCli(['propose', 'proposals.json', '--facts', 'facts.json'], { cwd: root })
+    await runCli(['approve', '--all'], { cwd: root })
+    const rulesFile = join(root, 'holdline.rules')
+    const original = await readFile(rulesFile, 'utf8')
+    expect(original).toMatch(/approved:\n\s+by: tester/)
+
+    await writeFile(rulesFile, original.replace('recognize: []', 'recognize:\n      - symbol: h:transfer'))
+    const recognized = await runCli(['check', '--facts', 'facts.json', '--format', 'agent'], { cwd: root })
+    expect(recognized.code).toBe(1)
+    expect(recognized.stdout).toContain('- vocabulary:staff "Caller is staff": this vocabulary entry was changed in holdline.rules without approval. Undo your change to it; only the user approves rule changes (they can run holdline approve vocabulary:staff).')
+    const reapproved = await runCli(['approve', 'vocabulary:staff'], { cwd: root })
+    expect(reapproved.code).toBe(0)
+    expect(reapproved.stdout).toContain('vocabulary:staff re-approved')
+    const after = JSON.parse((await runCli(['check', '--facts', 'facts.json', '--format', 'json'], { cwd: root })).stdout)
+    expect(after.results.filter((r: { rule: string }) => r.rule === 'vocabulary:staff')).toEqual([])
+
+    await writeFile(rulesFile, original.replace('- admin', '- owner'))
+    const exprEdit = JSON.parse((await runCli(['check', '--facts', 'facts.json', '--format', 'json'], { cwd: root })).stdout)
+    expect(exprEdit.results.filter((r: { status: string }) => r.status === 'unapproved-edit').map((r: { rule: string }) => r.rule))
+      .toContain('vocabulary:staff')
+    expect((await runCli(['check', '--facts', 'facts.json'], { cwd: root })).code).toBe(1)
   })
 
   it('propose reads stdin with "-" and reports invalid JSON as a usage error', async () => {
