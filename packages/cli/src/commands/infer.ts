@@ -5,7 +5,7 @@ import { loadFacts, loadRules } from '../workspace.js'
 export async function inferCommand(opts: { prompt?: boolean; area?: string; budget?: string; facts?: string }, io: Io): Promise<number> {
   if (!opts.prompt) throw new UsageError('holdline infer only prints a prompt for your agent: run `holdline infer --prompt`')
   const budget = opts.budget ? Number(opts.budget) : undefined
-  if (budget !== undefined && !(budget > 0)) throw new UsageError('--budget must be a positive number of tokens')
+  if (budget !== undefined && !(Number.isInteger(budget) && budget > 0)) throw new UsageError('--budget must be a positive integer number of tokens')
   const facts = await loadFacts(io.cwd, opts.facts)
   let prompt: string
   try {

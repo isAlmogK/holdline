@@ -38,7 +38,15 @@ describe('inference flow', () => {
 
   it('infer --prompt with a too-small budget is a usage error', async () => {
     const root = await makeProject({ 'facts.json': facts })
-    expect((await runCli(['infer', '--prompt', '--budget', '10', '--facts', 'facts.json'], { cwd: root })).code).toBe(2)
+    const out = await runCli(['infer', '--prompt', '--budget', '10', '--facts', 'facts.json'], { cwd: root })
+    expect(out.code).toBe(2)
+    expect(out.stderr).toContain('raise --budget')
+  })
+
+  it('--limit and --budget must be positive integers', async () => {
+    const root = await makeProject({ 'facts.json': facts, 'proposals.json': proposals })
+    expect((await runCli(['propose', 'proposals.json', '--facts', 'facts.json', '--limit', 'abc'], { cwd: root })).code).toBe(2)
+    expect((await runCli(['infer', '--prompt', '--budget', '0', '--facts', 'facts.json'], { cwd: root })).code).toBe(2)
   })
 
   it('proposing the same file twice reports skipped duplicates', async () => {
@@ -94,6 +102,20 @@ describe('inference flow', () => {
     expect(out.stdout).toContain('Rejected P-2')
     const pending = await readFile(join(root, '.holdline/pending.yaml'), 'utf8')
     expect(pending).toContain('key: P-3')
+    expect(await readFile(join(root, 'holdline.rules'), 'utf8')).toContain('id: R-001')
+    await expect(readdir(join(root, '.holdline/tests'))).rejects.toThrow()
+  })
+
+  it('review re-asks on unrecognized answers and saves each decision', async () => {
+    const root = await makeProject({ 'facts.json': facts, 'proposals.json': proposals })
+    await runCli(['propose', 'proposals.json', '--facts', 'facts.json'], { cwd: root })
+    const out = await runCli(['review'], { cwd: root, stdin: 'y\na\nq\n' })
+    expect(out.code).toBe(0)
+    expect(out.stdout).toContain('answer a, r, s or q')
+    expect(out.stdout).toContain('Approved P-1 as R-001')
+    expect(out.stdout).not.toContain('P-2 ?')
+    expect(await readFile(join(root, 'holdline.rules'), 'utf8')).toContain('id: R-001')
+    expect(await readFile(join(root, '.holdline/pending.yaml'), 'utf8')).toContain('key: P-2')
   })
 
   it('scan with no analyzers writes empty facts and says so', async () => {

@@ -24,9 +24,11 @@ export async function proposeCommand(source: string, opts: { facts?: string; lim
   } catch (e) {
     throw new UsageError(`proposals are not valid JSON: ${(e as Error).message}`)
   }
+  const limit = opts.limit === undefined ? undefined : Number(opts.limit)
+  if (limit !== undefined && !(Number.isInteger(limit) && limit > 0)) throw new UsageError('--limit must be a positive integer')
   const file = await loadRules(io.cwd)
   const facts = await loadFacts(io.cwd, opts.facts)
-  const report = validateProposals(json, facts, file, { limit: opts.limit ? Number(opts.limit) : undefined })
+  const report = validateProposals(json, facts, file, { limit })
   const { pending, added, conflicts } = addToPending(await loadPending(io.cwd), report)
   await savePending(io.cwd, pending)
 
