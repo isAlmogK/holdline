@@ -2,6 +2,7 @@ export const HOLDLINE_FACTS_VERSION = 1
 export * from './analyzer.js'
 export * from './cache.js'
 export * from './canonical.js'
+export * from './config.js'
 export * from './check/run.js'
 export * from './check/types.js'
 export * from './check/unreadable.js'

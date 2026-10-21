@@ -1,4 +1,4 @@
-import { FactsError, PendingFileError, ProposalError, RulesFileError } from '@holdline/core'
+import { ConfigError, FactsError, PendingFileError, ProposalError, RulesFileError } from '@holdline/core'
 import { Command, CommanderError } from 'commander'
 import { approveCommand, rejectCommand } from './commands/approve.js'
 import { checkCommand } from './commands/check.js'
@@ -76,7 +76,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
     return code
   } catch (e) {
     if (e instanceof CommanderError) return e.exitCode === 0 ? 0 : 2
-    if (e instanceof UsageError || e instanceof RulesFileError || e instanceof PendingFileError || e instanceof FactsError || e instanceof ProposalError) {
+    if (e instanceof UsageError || e instanceof RulesFileError || e instanceof PendingFileError || e instanceof FactsError || e instanceof ProposalError || e instanceof ConfigError) {
       io.stderr(`holdline: ${e.message}\n`)
       return 2
     }

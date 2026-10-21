@@ -4,6 +4,7 @@ import { join, relative } from 'node:path'
 import { promisify } from 'node:util'
 import type { Analyzer } from './analyzer.js'
 import { FileCache } from './cache.js'
+import { loadConfig } from './config.js'
 import { FactsError, emptyFacts, mergeFacts, parseFacts, type Facts } from './facts.js'
 
 const SKIP = new Set(['node_modules', '.git', '.holdline', 'dist', 'build', '.venv', 'vendor', '.next', '.svelte-kit'])
@@ -47,6 +48,8 @@ export async function listFiles(root: string): Promise<string[]> {
 
 export async function scan(root: string, analyzers: readonly Analyzer[]): Promise<{ facts: Facts; ran: string[] }> {
   const files = await listFiles(root)
+  // Outside the analyzer try/catch on purpose: a bad config is a usage error (exit 2), not an analyzer failure.
+  const config = await loadConfig(root)
   const cache = new FileCache(root)
   const parts: Facts[] = []
   const ran: string[] = []
@@ -67,7 +70,7 @@ export async function scan(root: string, analyzers: readonly Analyzer[]): Promis
     if (!applies) continue
     ran.push(analyzer.name)
     try {
-      const output = await analyzer.analyze({ root, files, cache })
+      const output = await analyzer.analyze({ root, files, cache, config })
       parts.push(parseFacts({ version: 1, ...output, analyzers: [{ name: analyzer.name, version: analyzer.version }] }, analyzer.name))
     } catch (e) {
       parts.push(e instanceof FactsError ? failed(analyzer, `invalid facts: ${e.message}`) : failed(analyzer, `analyzer failed: ${errorMessage(e)}`))

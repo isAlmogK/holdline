@@ -39,6 +39,17 @@ Reference docs (keep true when a contract changes): [docs/reference/facts.md](do
 | `packages/analyzer-*` | One per stack (Phase 1 and 2), each emits the fact graph |
 | `examples/golden-*` | Small apps with known rules and one breakage per rule |
 
+## Adding an analyzer
+
+A package under `packages/analyzer-*` depends only on `@holdline/core`. It is registered by one import and one array
+entry in `packages/cli/src/analyzers.ts`. Its settings come from its own section of `.holdline/config.yaml`
+(`AnalyzerContext.config`, see [docs/reference/facts.md](docs/reference/facts.md)).
+
+## Golden apps
+
+Phase 0 `golden-ts-postgres` uses JSON-patch breakages (`fixtures/breakages/*.json`) applied to hand-written facts.
+Phase 1 apps use `breakages/*.patch` unified diffs against the app, run end to end.
+
 ## Commands
 
 - `pnpm test`: all tests
