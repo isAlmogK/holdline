@@ -114,3 +114,11 @@ describe('firestoreAnalyzer through scan', () => {
     expect(out.diagnostics).toEqual([expect.objectContaining({ file: 'gone.rules', severity: 'error', message: expect.stringMatching(/^could not read: /) })])
   })
 })
+
+describe('facts validity', () => {
+  it('a rules file with an overflowing float still gives valid facts', async () => {
+    const r = await repo({ 'firestore.rules': 'service cloud.firestore { match /databases/{d}/documents { match /a/{id} { allow read: if resource.data.n < 1.0e999; } } }' })
+    const { facts } = await scan(r.root, [firestoreAnalyzer])
+    expect(facts.policies.map(p => p.condition)).toEqual([{ opaque: 'resource.data.n < 1.0e999' }, { opaque: 'resource.data.n < 1.0e999' }])
+  })
+})

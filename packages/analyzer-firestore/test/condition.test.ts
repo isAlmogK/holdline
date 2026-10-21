@@ -179,3 +179,10 @@ describe('normalizeCondition: soundness guards', () => {
     ] })
   })
 })
+
+describe('non-finite floats', () => {
+  it('a float literal that overflows to Infinity is opaque, not a literal', () => {
+    expect(cond('resource.data.n < 1.0e999')).toEqual({ opaque: 'resource.data.n < 1.0e999' })
+    expect(cond('resource.data.n in [1, -1.0e999]')).toEqual({ opaque: 'resource.data.n in [1, -1.0e999]' })
+  })
+})

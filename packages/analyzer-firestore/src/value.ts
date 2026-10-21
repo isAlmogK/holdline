@@ -113,9 +113,11 @@ function resolveIdent(name: string, env: Env, ctx: NormalizeContext): Value | un
 export function resolveValue(node: Node, env: Env, ctx: NormalizeContext): Value | undefined {
   switch (node.type) {
     case 'string':
-    case 'float':
     case 'bool':
       return literal(node.value)
+    case 'float':
+      // `1.0e999` overflows to Infinity, which no fact can hold: not exact.
+      return Number.isFinite(node.value) ? literal(node.value) : undefined
     case 'int':
       // Past 2^53 a JS number is not the integer Firestore compares (int64): not exact.
       return Number.isSafeInteger(node.value) ? literal(node.value) : undefined
