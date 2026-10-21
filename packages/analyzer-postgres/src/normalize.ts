@@ -1,5 +1,6 @@
-import type { Atom, Expr, Operand } from '@holdline/core'
+import type { Expr } from '@holdline/core'
 import type { CatalogIndex } from './catalog.js'
+import { atomExpr, SIGNED_IN } from './atoms.js'
 import { operand } from './operand.js'
 import type { SqlParse } from './pgparse.js'
 import { tableScope, type Scope, type Side } from './scope.js'
@@ -18,7 +19,6 @@ export interface NormalizeEnv {
 export interface Normalized { expr: Expr; functions: string[] }
 
 const COMPARISON: Record<string, 'eq' | 'ne' | 'lt' | 'gt'> = { '=': 'eq', '<>': 'ne', '<': 'lt', '>': 'gt' }
-const SIGNED_IN: Expr = { atom: { op: 'authenticated' } }
 
 // A policy expression as pg_get_expr prints it, for the policy's table and side.
 export function normalizeCondition(
@@ -84,18 +84,8 @@ function comparison(f: SqlNode, env: NormalizeEnv): Expr | undefined {
 
 function arrayItems(node: SqlNode | undefined): SqlNode[] | undefined {
   const k = kindOf(node)
-  if (k?.[0] === 'TypeCast') return arrayItems(k[1].arg)
+  // a cast around the array (`ARRAY[1.5]::integer[]`) changes its items: not modelled
   return k?.[0] === 'A_ArrayExpr' ? ((k[1].elements as SqlNode[] | undefined) ?? []) : undefined
-}
-
-// The facts' actor model has no anonymous role: an anonymous caller is "no actor".
-function atomExpr(a: Extract<Atom, { left: Operand }>): Expr | undefined {
-  const sides = [a.left, a.right]
-  const role = sides.some(o => o === 'actor.role' || o === 'actor.claim.role')
-  const anon = sides.some(o => typeof o === 'object' && o !== null && 'literal' in o
-    && (o.literal === 'anon' || (Array.isArray(o.literal) && o.literal.includes('anon'))))
-  if (role && anon) return a.op === 'eq' ? { not: SIGNED_IN } : undefined
-  return { atom: a }
 }
 
 function nullTest(f: SqlNode, env: NormalizeEnv): Expr | undefined {

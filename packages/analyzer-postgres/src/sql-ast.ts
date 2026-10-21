@@ -16,12 +16,12 @@ export function nameList(list: SqlNode[] | undefined): string[] {
   return (list ?? []).map(n => (n?.String?.sval as string | undefined) ?? '')
 }
 
-const NUMERIC = new Set(['int2', 'int4', 'int8', 'integer', 'bigint', 'smallint', 'numeric', 'decimal', 'float4', 'float8', 'real'])
+const INTEGER = new Set(['int2', 'int4', 'int8', 'integer', 'bigint', 'smallint'])
+const NUMERIC = new Set([...INTEGER, 'numeric', 'decimal', 'float4', 'float8', 'real'])
+const TEXTUAL = new Set(['text', 'varchar', 'bpchar', 'char', 'character', 'name'])
 
-const TEXTUAL = new Set(['text', 'varchar', 'bpchar', 'char', 'name'])
-
-// A constant, with a cast around it applied the way Postgres would for the values we can model:
-// numbers parse, uuids lowercase, other string casts keep the string. A boolean cast of a string is not read.
+// A constant, with a cast around it applied the way Postgres would for the values we can model.
+// A cast that changes the value in a way we don't model (type modifiers, citext, a number to boolean) is not a constant.
 export function constant(node: SqlNode | undefined): { value: Literal } | undefined {
   const k = kindOf(node)
   if (!k) return undefined
@@ -30,17 +30,25 @@ export function constant(node: SqlNode | undefined): { value: Literal } | undefi
     const inner = constant(f.arg)
     if (!inner) return inner
     const type = nameList(f.typeName?.names).at(-1) ?? ''
-    if (typeof inner.value === 'number' && TEXTUAL.has(type)) {
-      const raw = kindOf(f.arg)?.[1].fval?.fval as string | undefined // keep `1.50` as written
-      return { value: raw ?? String(inner.value) }
+    if (f.typeName?.typmods) return undefined
+    const v = inner.value
+    if (v === null) return inner
+    if (typeof v === 'number') {
+      if (TEXTUAL.has(type)) return { value: (kindOf(f.arg)?.[1].fval?.fval as string | undefined) ?? String(v) } // keep `1.50` as written
+      if (INTEGER.has(type)) return Number.isInteger(v) ? inner : undefined
+      return NUMERIC.has(type) ? inner : undefined
     }
-    if (typeof inner.value !== 'string') return inner
+    if (typeof v === 'boolean') {
+      if (TEXTUAL.has(type)) return { value: String(v) }
+      return type === 'bool' || type === 'boolean' ? inner : undefined
+    }
+    if (typeof v !== 'string') return undefined
     if (NUMERIC.has(type)) {
-      const n = Number(inner.value)
-      return inner.value.trim() !== '' && Number.isFinite(n) ? { value: n } : undefined
+      const n = Number(v)
+      return v.trim() !== '' && Number.isFinite(n) && (!INTEGER.has(type) || Number.isInteger(n)) ? { value: n } : undefined
     }
-    if (type === 'bool' || type === 'boolean') return undefined
-    if (type === 'uuid') return { value: inner.value.toLowerCase() }
+    if (type === 'bool' || type === 'boolean' || type === 'citext') return undefined
+    if (type === 'uuid') return { value: v.toLowerCase() }
     return inner
   }
   if (kind !== 'A_Const') return undefined

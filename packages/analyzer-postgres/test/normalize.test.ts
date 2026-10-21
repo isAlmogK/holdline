@@ -85,3 +85,44 @@ describe('normalizeCondition: comparisons and structure', () => {
     expect(norm('is_member(org_id)')).toEqual({ opaque: 'is_member(org_id)' })
   })
 })
+
+describe('normalizeCondition: soundness', () => {
+  const opaque = (sql: string) => expect(norm(sql)).toHaveProperty('opaque')
+  it('keeps only eq and in against string literals for the role', () => {
+    opaque("(auth.role() <> 'authenticated'::text)")
+    opaque('(auth.role() = status)')
+    opaque("(auth.role() = ANY (ARRAY['authenticated'::text, 'anon'::text]))")
+    opaque("((auth.jwt() ->> 'role'::text) <> 'x'::text)")
+    expect(norm("(auth.role() = 'authenticated'::text)")).toEqual(atom({ op: 'eq', left: 'actor.role', right: { literal: 'authenticated' } }))
+    expect(norm("(auth.role() = ANY (ARRAY['a'::text, 'b'::text]))"))
+      .toEqual(atom({ op: 'in', left: 'actor.role', right: { literal: ['a', 'b'] } }))
+  })
+  it('leaves claims the anon key carries opaque', () => {
+    for (const k of ['iss', 'ref', 'aud', 'iat', 'exp']) opaque(`((auth.jwt() ->> '${k}'::text) = 'supabase'::text)`)
+    opaque("(((auth.jwt() -> 'iss'::text) ->> 'x'::text) = 'supabase'::text)")
+  })
+  it('keeps claim comparisons only against plain strings', () => {
+    opaque("((auth.jwt() ->> 'is_admin'::text) = 'true'::text)")
+    opaque("((auth.jwt() ->> 'tier'::text) = '5'::text)")
+    opaque("((auth.jwt() ->> 'tier'::text) = ANY (ARRAY['a'::text, '1.5'::text]))")
+    opaque("((auth.jwt() ->> 'tier'::text) > 'a'::text)")
+    opaque("((auth.jwt() ->> 'tier'::text) = status)")
+    expect(norm("((auth.jwt() ->> 'user_role'::text) = 'admin'::text)"))
+      .toEqual(atom({ op: 'eq', left: 'actor.claim.user_role', right: { literal: 'admin' } }))
+    expect(norm("(((auth.jwt() ->> 'user_role'::text))::text = 'admin'::text)"))
+      .toEqual(atom({ op: 'eq', left: 'actor.claim.user_role', right: { literal: 'admin' } }))
+  })
+  it('does not drop a cast around an array', () => {
+    opaque('(n = ANY ((ARRAY[1.5, 2.5])::integer[]))')
+    opaque("(status = ANY ((ARRAY[1, 2])::text[]))")
+  })
+  it('keeps lt and gt only for a number against a non-literal', () => {
+    opaque("(status < 'm'::text)")
+    opaque('(1 < 2)')
+    expect(norm('(n < 3)')).toEqual(atom({ op: 'lt', left: 'resource.n', right: { literal: 3 } }))
+    expect(norm('(3 < n)')).toEqual(atom({ op: 'lt', left: { literal: 3 }, right: 'resource.n' }))
+  })
+  it('makes a NULL list item opaque', () => {
+    opaque("(status = ANY (ARRAY['a'::text, NULL::text]))")
+  })
+})
