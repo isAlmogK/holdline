@@ -2,7 +2,7 @@
 // otherwise inside `firebase emulators:exec` with a worker. Missing tools are infrastructure failures.
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -84,11 +84,12 @@ export function workerCommand(inPath: string, outPath: string): string {
   return [process.execPath, '--import', loader, worker, inPath, outPath].map(shellQuote).join(' ')
 }
 
+// Every port is pinned, the Firestore websocket too (it defaults to 9150), so runs side by side do not collide.
 async function prepare(dir: string, input: FirebaseInput): Promise<void> {
-  const [firestore, storage, hub, logging] = await freePorts(4)
+  const [firestore, websocket, storage, hub, logging] = await freePorts(5)
   const config = {
     emulators: {
-      firestore: { host: '127.0.0.1', port: firestore },
+      firestore: { host: '127.0.0.1', port: firestore, websocketPort: websocket },
       storage: { host: '127.0.0.1', port: storage },
       hub: { port: hub },
       logging: { port: logging },
@@ -110,7 +111,11 @@ async function exec(input: FirebaseInput, env: NodeJS.ProcessEnv): Promise<Emula
     const outPath = join(dir, 'out.json')
     const args = ['emulators:exec', '--only', 'firestore,storage', '--project', 'holdline-test',
       '--config', join(dir, 'firebase.json'), workerCommand(join(dir, 'input.json'), outPath)]
-    const exit = await run('firebase', args, env, dir, TIMEOUT_MS)
+    // firebase-tools keeps per-machine state in os.tmpdir(): the Storage emulator's blobs (deleted when it stops,
+    // which crashes another suite's next upload) and the hub locator. A private TMPDIR keeps each run's own.
+    const tmp = join(dir, 'tmp')
+    await mkdir(tmp)
+    const exit = await run('firebase', args, { ...env, TMPDIR: tmp }, dir, TIMEOUT_MS)
     if (exit.timedOut) return { infra: `the Firebase emulator run timed out after ${TIMEOUT_MS / 1000} s: ${tail(exit.output)}` }
     if (existsSync(outPath)) {
       const text = await readFile(outPath, 'utf8')

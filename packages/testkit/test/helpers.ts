@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { toolsMissing } from '../src/emulator.js'
@@ -11,6 +11,16 @@ export async function project(files: Record<string, string>): Promise<string> {
     await writeFile(join(root, p), c)
   }
   return root
+}
+
+// A directory holding fake executables (name → shell script body).
+export async function bin(scripts: Record<string, string>): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'holdline-bin-'))
+  for (const [name, body] of Object.entries(scripts)) {
+    await writeFile(join(dir, name), `#!/bin/sh\n${body}\n`)
+    await chmod(join(dir, name), 0o755)
+  }
+  return dir
 }
 
 // PGlite boots a WASM Postgres per test; allow for parallel-suite load.

@@ -1,20 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, writeFile, chmod } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { FIREBASE_INSTALL_HINT, runOnEmulator, shellQuote, toolsMissing, workerCommand } from '../src/emulator.js'
 import { toMetadata } from '../src/firebase-ops.js'
-
-// A directory holding fake executables (name → shell script body).
-async function bin(scripts: Record<string, string>): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'holdline-bin-'))
-  for (const [name, body] of Object.entries(scripts)) {
-    await writeFile(join(dir, name), `#!/bin/sh\n${body}\n`)
-    await chmod(join(dir, name), 0o755)
-  }
-  return dir
-}
+import { bin } from './helpers.js'
 
 describe('runOnEmulator', () => {
   it('reports a missing firebase binary as infrastructure with the install hint', async () => {
