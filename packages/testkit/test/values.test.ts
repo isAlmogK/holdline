@@ -21,4 +21,14 @@ describe('values', () => {
     expect(mapValue('x', 'text', uuids)).toBe('x')
     expect(isUuid('nope')).toBe(false)
   })
+  it('stableInt stays within smallint range, is stable, and does not collide for generator values', () => {
+    const names = ['value-1', 'value-2', 'other-value', 'user-1', 'user-2', 'filler', 'missing-1', 'not-allowed', 'not-null']
+    for (const n of names) {
+      const v = stableInt(n)
+      expect(v).toBeGreaterThanOrEqual(1)
+      expect(v).toBeLessThanOrEqual(30000)
+      expect(stableInt(n)).toBe(v)
+    }
+    expect(new Set(names.map(stableInt)).size).toBe(names.length)
+  })
 })

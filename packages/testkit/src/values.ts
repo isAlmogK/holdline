@@ -19,9 +19,9 @@ export function uuidV5(name: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
 }
 
-// A stable integer in 1..1_000_000 for a non-numeric placeholder.
+// A stable integer in 1..30000 (fits smallint) for a non-numeric placeholder.
 export function stableInt(s: string): number {
-  return (createHash('sha256').update(s).digest().readUInt32BE(0) % 1_000_000) + 1
+  return (createHash('sha256').update(s).digest().readUInt32BE(0) % 30_000) + 1
 }
 
 // Maps a test-case value to something the column type accepts; uuid placeholders are recorded in `uuids`.
