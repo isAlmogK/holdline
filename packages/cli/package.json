@@ -1,0 +1,12 @@
+{
+  "name": "holdline",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@holdline/core": "workspace:*",
+    "commander": "^15.0.0",
+    "yaml": "^2.9.1"
+  }
+}
