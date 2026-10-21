@@ -83,6 +83,27 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
 
+  packages/testkit:
+    dependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.5.11
+        version: 0.5.11
+      '@firebase/rules-unit-testing':
+        specifier: ^6.0.0
+        version: 6.0.0(firebase@13.1.0)
+      '@holdline/core':
+        specifier: workspace:*
+        version: link:../core
+      firebase:
+        specifier: ^13.1.0
+        version: 13.1.0
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+
 packages:
 
   '@electric-sql/pglite@0.5.11':

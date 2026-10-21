@@ -1,0 +1,15 @@
+{
+  "name": "@holdline/testkit",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.11",
+    "@firebase/rules-unit-testing": "^6.0.0",
+    "@holdline/core": "workspace:*",
+    "firebase": "^13.1.0",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.7"
+  }
+}
