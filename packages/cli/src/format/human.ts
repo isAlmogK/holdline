@@ -1,11 +1,7 @@
 import { formatExpr, type Result, type Summary } from '@holdline/core'
+import { where } from './where.js'
 
 const MARK: Record<Result['status'], string> = { pass: '✓', violation: '✗', stale: '!', unknown: '?', 'unapproved-edit': '✗' }
-
-export function where(r: Result): string {
-  if (!r.at) return ''
-  return r.at.file ? `${r.at.file}${r.at.line ? `:${r.at.line}` : ''}` : r.at.symbol
-}
 
 export function formatHuman(results: Result[], summary: Summary, texts: Map<string, string>): string {
   const lines: string[] = []
