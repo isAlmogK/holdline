@@ -3,10 +3,9 @@ import { isLookupOperand, type Atom } from './expr.js'
 import { formatAtom } from './format.js'
 import { hashRule } from './hash.js'
 import { expand, flattenAnd, type Vocabulary } from './logic.js'
-import { concretize } from './paths.js'
-import type { DataAccessRule, Rule } from './rules.js'
+import type { Rule } from './rules.js'
 import type { TestCase, TestFile } from './testcase.js'
-import type { Op } from './facts.js'
+import { toCase } from './testgen-case.js'
 import { denyWorld } from './testgen-deny.js'
 import { holds } from './testgen-eval.js'
 import { satisfy } from './testgen-satisfy.js'
@@ -52,33 +51,6 @@ export function generateTests(rule: Rule, vocab: Vocabulary): TestFile | undefin
     return { ...base, cases: [], skipped: [e.message] }
   }
   return base
-}
-
-function targetPath(rule: DataAccessRule): string {
-  return rule.target.store === 'postgres' ? rule.target.table : rule.target.path
-}
-
-function toCase(name: string, w: World, dataWorld: World, rule: DataAccessRule, op: Op, expect: 'allow' | 'deny'): TestCase {
-  const path = rule.target.store === 'postgres' ? storePath(rule) : concretize(targetPath(rule), p => w.params[p] ?? `${p}-1`)
-  const record = structuredClone(w.resource)
-  const seed = structuredClone([...(op === 'create' ? [] : [{ path: storePath(rule), data: record }]), ...w.docs])
-  const data = op === 'create' || op === 'update' ? structuredClone({ ...dataWorld.resource, ...w.incoming }) : undefined
-  const listPath = path.split('/').slice(0, -1).join('/')
-  return {
-    name,
-    as: w.actor ? { ...w.actor, claims: { ...w.actor.claims } } : null,
-    seed: rule.target.store === 'postgres' ? seed : seed.map(s => {
-      const own = s.path === storePath(rule)
-      const store = rule.target.store === 'storage' ? { store: own ? 'storage' as const : 'firestore' as const } : {}
-      return { path: own ? path : s.path, ...store, data: s.data }
-    }),
-    do: { op, path: op === 'list' && rule.target.store !== 'postgres' ? listPath : path, ...(data ? { data } : {}) },
-    expect,
-  }
-}
-
-function storePath(rule: DataAccessRule): string {
-  return rule.target.store === 'postgres' ? rule.target.table.includes('.') ? rule.target.table : `public.${rule.target.table}` : targetPath(rule)
 }
 
 // True when an atom reads `<root>.*` directly or in a lookup or `exists` path placeholder.
