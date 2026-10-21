@@ -76,7 +76,7 @@ describe('pending and approval', () => {
     const edited = { ...first.file, rules: first.file.rules.map(r => (r.id === 'R-001' ? { ...r, text: 'Only staff may transfer a dog' } : r)) }
     expect(runChecks(facts, edited).results.find(r => r.rule === 'R-001')!.status).toBe('unapproved-edit')
     const again = approve(edited, first.pending, ['R-001'], { by: 'almog', at: '2026-10-22' })
-    expect(runChecks(facts, again.file).results.find(r => r.rule === 'R-001')!.status).not.toBe('unapproved-edit')
+    expect(runChecks(facts, again.file).results.find(r => r.rule === 'R-001')!.status).toBe('violation')
   })
   it('rejects unknown keys, and reject removes pending rules', () => {
     expect(() => approve(emptyRulesFile(), pending, ['P-9'], { by: 'a', at: 'b' })).toThrow(/P-9/)
@@ -87,5 +87,35 @@ describe('pending and approval', () => {
     const muted = mute(file, 'R-001', { by: 'almog', at: '2026-10-22', reason: 'migrating' })
     expect(muted.rules[0]).toMatchObject({ status: 'muted', muted: { reason: 'migrating' } })
     expect(() => mute(file, 'R-404', { by: 'a', at: 'b', reason: 'c' })).toThrow(/R-404/)
+  })
+  it('guards vocabulary clashes and duplicates in pending', () => {
+    const redefined = { ...staffVocab, expr: { atom: { op: 'in', left: 'actor.role', right: { literal: ['owner'] } } } }
+    const second = validateProposals({ vocabulary: [redefined], rules: [{ ...transferRule, text: 'Other wording', evidence: ['h:transfer'], target: { routes: 'POST /dogs/*/transfer' } }] }, facts, emptyRulesFile())
+    const out = addToPending(pending, second)
+    expect(out.added).toEqual([])
+    expect(out.pending).toEqual(pending)
+    expect(out.conflicts[0]!.reason).toMatch(/vocabulary staff is already pending with a different definition/)
+  })
+  it('does not duplicate pending rules or same-definition vocabulary', () => {
+    const again = addToPending(pending, report)
+    expect(again.pending.rules.map(r => r.key)).toEqual(['P-1', 'P-2'])
+    expect(again.pending.vocabulary).toHaveLength(1)
+    expect(again.added).toEqual([])
+    expect(again.conflicts.map(c => c.reason)).toEqual(['duplicate of pending P-1', 'duplicate of pending P-2'])
+  })
+  it('approve throws when pending vocabulary clashes with the file', () => {
+    const { file } = approve(emptyRulesFile(), pending, ['P-2'], { by: 'a', at: 'b' })
+    expect(() => approve(file, pending, ['P-1'], { by: 'a', at: 'b' })).toThrow(/staff/)
+  })
+  it('approve de-duplicates keys', () => {
+    const out = approve(emptyRulesFile(), pending, ['P-2', 'P-2'], { by: 'a', at: 'b' })
+    expect(out.file.rules).toHaveLength(1)
+    expect(out.approved).toHaveLength(1)
+  })
+  it('rejects proposals that carry approval state, and clamps limit', () => {
+    const r = validateProposals({ vocabulary: [staffVocab], rules: [{ ...transferRule, status: 'approved' }, { ...transferRule, approved: { by: 'x', at: 'y', hash: 'z' } }] }, facts, emptyRulesFile())
+    expect(r.rules.map(o => o.classification)).toEqual(['rejected', 'rejected'])
+    const neg = validateProposals({ vocabulary: [staffVocab], rules: [transferRule] }, facts, emptyRulesFile(), { limit: -3 })
+    expect(neg.dropped).toBe(1)
   })
 })

@@ -71,7 +71,7 @@ export function validateProposals(input: unknown, facts: Facts, file: RulesFile,
     return { classification: 'holds', raw, rule }
   })
 
-  const limit = opts.limit ?? 25
+  const limit = Math.max(0, opts.limit ?? 25)
   const kept = outcomes
     .filter(o => o.classification !== 'rejected')
     .sort((a, b) => Number(b.classification === 'broken') - Number(a.classification === 'broken')
