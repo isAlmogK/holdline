@@ -1,8 +1,9 @@
+import { execFileSync } from 'node:child_process'
 import { mkdtemp, writeFile, chmod } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { FIREBASE_INSTALL_HINT, runOnEmulator, toolsMissing } from '../src/emulator.js'
+import { FIREBASE_INSTALL_HINT, runOnEmulator, shellQuote, toolsMissing, workerCommand } from '../src/emulator.js'
 import { toMetadata } from '../src/firebase-ops.js'
 
 // A directory holding fake executables (name → shell script body).
@@ -41,6 +42,23 @@ describe('runOnEmulator', () => {
     })
     const r = await runOnEmulator({ firestoreRules: 'x', files: [] }, { PATH: dir })
     expect(r).toEqual({ infra: 'the Firebase emulator did not start: port taken' })
+  })
+})
+
+// The words a POSIX shell (as `firebase emulators:exec` runs its command) makes of `command`.
+const shellWords = (command: string) =>
+  execFileSync('/bin/sh', ['-c', `set -- ${command}; for a; do printf '%s\\0' "$a"; done`]).toString().split('\0').slice(0, -1)
+
+describe('worker command quoting', () => {
+  const nasty = "/tmp/a dir/$HOME/`echo hi`/it's \"q\"/in.json"
+  it('keeps every character of a path through the shell', () => {
+    expect(shellWords(shellQuote(nasty))).toEqual([nasty])
+    expect(shellQuote("it's")).toBe("'it'\\''s'")
+  })
+  it('passes the input and output paths to the worker unchanged', () => {
+    const words = shellWords(workerCommand(nasty, `${nasty}.out`))
+    expect(words[0]).toBe(process.execPath)
+    expect(words.slice(-2)).toEqual([nasty, `${nasty}.out`])
   })
 })
 

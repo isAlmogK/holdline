@@ -73,11 +73,15 @@ function tail(output: string): string {
   return output.split(/\r?\n/).filter(l => l.trim() !== '').slice(-TAIL_LINES).join('\n')
 }
 
-function workerCommand(inPath: string, outPath: string): string {
+// `emulators:exec` runs its command through a shell: each word is single-quoted, a `'` as `'\''`, so `$`, backticks
+// and spaces in a path stay literal.
+export const shellQuote = (a: string) => `'${a.replace(/'/g, "'\\''")}'`
+
+export function workerCommand(inPath: string, outPath: string): string {
   const tsxDir = dirname(createRequire(import.meta.url).resolve('tsx/package.json'))
   const loader = pathToFileURL(join(tsxDir, 'dist/loader.mjs')).href
   const worker = fileURLToPath(new URL('./firebase-worker.ts', import.meta.url))
-  return [process.execPath, '--import', loader, worker, inPath, outPath].map(a => `"${a}"`).join(' ')
+  return [process.execPath, '--import', loader, worker, inPath, outPath].map(shellQuote).join(' ')
 }
 
 async function prepare(dir: string, input: FirebaseInput): Promise<void> {
