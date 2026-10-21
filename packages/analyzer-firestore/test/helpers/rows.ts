@@ -39,7 +39,8 @@ export const ROWS: Row[] = [
   { name: 'or with an actor atom', store: 'firestore', condition: 'resource.data.a == 1 || request.auth.uid == resource.data.owner' },
   { name: 'not', store: 'firestore', condition: '!(resource.data.a == 1)' },
   { name: 'not over an actor atom', store: 'firestore', condition: '!(request.auth.uid == resource.data.owner)' },
-  { name: 'ternary', store: 'firestore', condition: 'resource.data.a == 1 ? request.auth != null : false' },
+  { name: 'ternary', store: 'firestore', condition: `resource.data.a == 1 ? request.auth != null : resource.data.status == 'open'` },
+  { name: 'precedence without parentheses', store: 'firestore', condition: 'resource.data.a == 1 || resource.data.b == 2 && request.auth != null' },
   { name: 'true', store: 'firestore', condition: 'true' },
   { name: 'false', store: 'firestore', condition: 'false' },
   {
@@ -55,9 +56,36 @@ export const ROWS: Row[] = [
     condition: `signedIn() && resource.data.status == 'open'`,
     vocabulary: { signedIn: { atom: { op: 'authenticated' } } },
   },
+  {
+    name: 'param and let bound to a boolean',
+    store: 'firestore',
+    before: `function check(ok) { let open = resource.data.status == 'open'; return ok && open; }`,
+    condition: 'check(request.auth != null)',
+  },
+  {
+    name: 'user function in value position',
+    store: 'firestore',
+    before: 'function ownerOf(rec) { return rec.owner; }',
+    condition: 'ownerOf(resource.data) == request.auth.uid',
+  },
+  {
+    name: 'param shadowing a global',
+    store: 'firestore',
+    before: `function h(resource) { return resource.data.status == 'open'; }`,
+    condition: 'h(request.resource)',
+  },
+  { name: 'fallback on the right', store: 'firestore', condition: `'admin' == resource.data.get('role', '')` },
+  {
+    // The fallback satisfies the comparison, so that side stays opaque; the other side still decides.
+    name: 'satisfying fallback stays opaque inside or',
+    store: 'firestore',
+    condition: `resource.data.get('role', 'admin') == 'admin' || resource.data.status == 'open'`,
+  },
+  { name: 'nested claim', store: 'firestore', condition: `request.auth.token.firebase.sign_in_provider == 'password'` },
   { name: 'bare boolean', store: 'firestore', condition: 'resource.data.published' },
   { name: 'Storage metadata', store: 'storage', condition: 'resource.metadata.owner == request.auth.uid' },
   { name: 'Storage firestore.exists', store: 'storage', condition: 'firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))' },
+  { name: 'Storage firestore.get', store: 'storage', condition: 'thingId in firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.orgIds' },
 ]
 
 /** The rules file for a row: its condition under `allow <op>` on `match /things/{thingId}`. */
@@ -68,8 +96,8 @@ export function rulesSource(row: Row, op: 'read' | 'create' = 'read'): string {
     : `rules_version = '2';\nservice firebase.storage {\n  match /b/{bucket}/o {\n    ${inner}\n  }\n}\n`
 }
 
-/** True when the row reads `request.resource` (a write rule is where it is defined). */
-export const readsIncoming = (row: Row): boolean => row.condition.includes('request.resource')
+/** True when the row reads `request.resource` (a write rule is where it is defined), in its condition or its functions. */
+export const readsIncoming = (row: Row): boolean => `${row.before ?? ''} ${row.condition}`.includes('request.resource')
 
 /** The vocabulary the row's recognized functions expand to, keyed by recognizer id. */
 export const vocabularyOf = (row: Row): ReadonlyMap<string, Expr> => new Map(Object.entries(row.vocabulary ?? {}))

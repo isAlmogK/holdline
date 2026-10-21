@@ -29,6 +29,12 @@ describe('the Firestore model (interpret)', () => {
     expect(interpret(row(`resource.data.n == 'a'`), world({ resource: { n: 1 } }))).toBe(false)
     expect(interpret(row('resource.data.published'), world({ resource: { published: 'yes' } }))).toBe('error')
   })
+  it('throws on forms it does not model, rather than calling them errors', () => {
+    const anyone = world({ resource: { a: 1 }, actor: { uid: 'u1', claims: {} } })
+    expect(() => interpret(row('request.time == null'), anyone)).toThrow('unsupported member request.time')
+    expect(() => interpret(row(`resource.id == 'x'`), anyone)).toThrow('unsupported member resource.id')
+    expect(() => interpret(row('resource.data[1] == 1'), anyone)).toThrow('unsupported index key')
+  })
   it('reads documents, map defaults and Storage metadata', () => {
     const uid = { actor: { uid: 'u1', claims: {} } }
     const inOrgs = row(`thingId in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.orgIds`)
@@ -40,7 +46,7 @@ describe('the Firestore model (interpret)', () => {
 })
 
 describe('soundness: Firestore true implies the Expr is not false', () => {
-  // Fixed sample to show each row is exercised: it allows somewhere (except `false`).
+  // A fixed sample to show each row is exercised.
   const sample = fc.sample(worldArb, { numRuns: 1000, seed: 7 })
 
   for (const r of ROWS) {
@@ -48,13 +54,12 @@ describe('soundness: Firestore true implies the Expr is not false', () => {
       const expr = normalize(r)
       const vocab = vocabularyOf(r)
 
-      it('normalizes to something other than opaque', () => {
-        expect('opaque' in expr).toBe(false)
-      })
-
-      it('is allowed by Firestore in some sampled world', () => {
-        const allowed = sample.some(w => interpret(r, w) === true)
-        expect(allowed).toBe(r.condition !== 'false')
+      it('is allowed by Firestore in some sampled world, where the Expr is exactly true', () => {
+        // Guards against a vacuous property: the row allows somewhere, and the Expr decides it (not only unknowns).
+        const allowing = sample.filter(w => interpret(r, w) === true)
+        if (r.condition === 'false') return expect(allowing).toEqual([])
+        expect(allowing.length).toBeGreaterThan(0)
+        expect(allowing.some(w => evalExpr(expr, w, vocab) === true)).toBe(true)
       })
 
       it('never gives false where Firestore allows', () => {

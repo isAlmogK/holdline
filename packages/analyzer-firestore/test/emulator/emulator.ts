@@ -9,6 +9,7 @@ export interface Emulator { host: string; port: number; stop(): Promise<void> }
 export const PROJECT_ID = 'demo-holdline'
 const HOST = '127.0.0.1'
 const START_TIMEOUT_MS = 60_000
+const OUTPUT_TAIL_CHARS = 2000
 
 /** The Java major version (`1.8` → 8, `21.0.2` → 21), or undefined when `java -version` fails. */
 function javaMajor(): number | undefined {
@@ -60,7 +61,12 @@ export async function startEmulator(): Promise<Emulator | { skip: string }> {
     firestore: { rules: 'firestore.rules' },
     emulators: { firestore: { host: HOST, port, websocketPort }, hub: { host: HOST, port: hubPort }, ui: { enabled: false } },
   }))
-  const child = spawn('firebase', ['emulators:start', '--only', 'firestore', '--project', PROJECT_ID], { cwd: dir, stdio: 'ignore' })
+  const child = spawn('firebase', ['emulators:start', '--only', 'firestore', '--project', PROJECT_ID], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] })
+  // The tail of the emulator's output, for the error when it does not start. Reading the pipes also keeps them from filling.
+  let output = ''
+  const keep = (chunk: Buffer) => { output = (output + chunk.toString('utf8')).slice(-OUTPUT_TAIL_CHARS) }
+  child.stdout.on('data', keep)
+  child.stderr.on('data', keep)
   let exited = false
   const exit = new Promise<void>(resolve => child.once('exit', () => { exited = true; resolve() }))
   const stop = async () => {
@@ -77,7 +83,8 @@ export async function startEmulator(): Promise<Emulator | { skip: string }> {
   while (!(await accepts(port))) {
     if (exited || Date.now() > deadline) {
       await stop()
-      throw new Error(exited ? 'the Firestore emulator exited before it started' : `the Firestore emulator did not start within ${START_TIMEOUT_MS / 1000} s`)
+      const reason = exited ? 'the Firestore emulator exited before it started' : `the Firestore emulator did not start within ${START_TIMEOUT_MS / 1000} s`
+      throw new Error(`${reason}; its output ended with:\n${output}`)
     }
     await new Promise(resolve => setTimeout(resolve, 250))
   }

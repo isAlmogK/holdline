@@ -2,14 +2,15 @@ import fc from 'fast-check'
 import type { RulesTestEnvironment, TokenOptions } from '@firebase/rules-unit-testing'
 import { afterAll, describe, expect, it } from 'vitest'
 import { evalExpr } from '../helpers/eval-expr.js'
+import { interpret } from '../helpers/interpret.js'
 import { normalize, readsIncoming, ROWS, rulesSource, vocabularyOf, type Row } from '../helpers/rows.js'
 import { worldArb, type World } from '../helpers/world.js'
 import { PROJECT_ID, startEmulator } from './emulator.js'
 
 /**
  * The soundness property against the real rules engine: whenever the Firestore emulator allows a request, the
- * Expr the analyzer emits is not false in the Holdline model. Storage rows are model-only (the Storage emulator
- * is a second service).
+ * Expr the analyzer emits is not false in the Holdline model, and the rules model (`interpret`, meant to allow at
+ * least what Firestore allows) allows it too. Storage rows are model-only (the Storage emulator is a second service).
  */
 const emu = await startEmulator()
 const TITLE = '@emulator soundness against the Firestore emulator'
@@ -49,6 +50,8 @@ async function allowed(env: RulesTestEnvironment, w: World, op: 'read' | 'create
 }
 
 const variants = (row: Row): ('read' | 'create')[] => (readsIncoming(row) ? ['read', 'create'] : ['read'])
+/** Variants that cannot allow: `false`, and a read of a row that needs `request.resource`. */
+const neverAllows = (row: Row, op: 'read' | 'create') => row.condition === 'false' || (op === 'read' && readsIncoming(row))
 
 describe.skipIf(skipped)(skipped ? `${TITLE} (skipped: ${emu.skip})` : TITLE, () => {
   afterAll(async () => {
@@ -66,15 +69,22 @@ describe.skipIf(skipped)(skipped ? `${TITLE} (skipped: ${emu.skip})` : TITLE, ()
           projectId: PROJECT_ID,
           firestore: { host: emu.host, port: emu.port, rules: rulesSource(row, op) },
         })
+        let allowedWorlds = 0
         try {
           for (const sampled of WORLDS) {
             const w = forOp(sampled, op)
             await seed(env, w)
-            if (await allowed(env, w, op)) expect(evalExpr(expr, w, vocab), JSON.stringify(w)).not.toBe(false)
+            if (!(await allowed(env, w, op))) continue
+            allowedWorlds++
+            expect(interpret(row, w), `rules model, ${JSON.stringify(w)}`).toBe(true)
+            expect(evalExpr(expr, w, vocab), `Holdline model, ${JSON.stringify(w)}`).not.toBe(false)
           }
         } finally {
           await env.cleanup()
         }
+        // Not vacuous: the emulator allowed somewhere (the sample is fixed; the rules model allows in it too).
+        if (neverAllows(row, op)) expect(allowedWorlds).toBe(0)
+        else expect(allowedWorlds).toBeGreaterThan(0)
       }, 120_000)
     }
   }

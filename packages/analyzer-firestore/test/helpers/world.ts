@@ -43,8 +43,14 @@ const FIELDS: Record<string, fc.Arbitrary<unknown>> = {
 
 const record: fc.Arbitrary<Record<string, unknown>> = fc.record(FIELDS, { requiredKeys: [], noNullPrototype: true })
 
+/** Custom claims, sometimes of the wrong type (`'true'`, `1`), and the token's nested sign-in provider. */
+const claims = fc.record({
+  admin: fc.oneof({ arbitrary: fc.boolean(), weight: 3 }, { arbitrary: fc.constantFrom<unknown>('true', 1), weight: 1 }),
+  firebase: fc.record({ sign_in_provider: fc.constantFrom('password', 'anonymous') }, { noNullPrototype: true }),
+}, { requiredKeys: [], noNullPrototype: true })
+
 const actor = fc.option(
-  fc.record({ uid: fc.constantFrom(...UIDS), claims: fc.record({ admin: fc.boolean() }, { requiredKeys: [], noNullPrototype: true }) }, { noNullPrototype: true }),
+  fc.record({ uid: fc.constantFrom(...UIDS), claims }, { noNullPrototype: true }),
   { nil: null },
 )
 

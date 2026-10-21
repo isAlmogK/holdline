@@ -1,6 +1,7 @@
-import type { Allow, Block, FunctionDecl, Node, PathPart } from '../../src/ast.js'
+import type { Allow, Block, FunctionDecl, Node } from '../../src/ast.js'
 import { parseRules } from '../../src/parser.js'
 import { rulesSource, type Row } from './rows.js'
+import { documentAt, ERROR, member, Members, Namespace, PathValue, segmentText, type V } from './rules-values.js'
 import { isMap, sameValue, type World } from './world.js'
 
 /**
@@ -8,14 +9,10 @@ import { isMap, sameValue, type World } from './world.js'
  * Reading a missing field, a member of null (`request.auth` when anonymous, `get` of a missing document), a type
  * mismatch in an ordering or `in`, and a non-boolean where a boolean is needed are errors. `&&`/`||` absorb
  * errors as Firestore does (false && error = false, true || error = true); everything else with an error operand
- * is an error. A top-level error denies. Nodes outside the subset the rows use throw: a bug in the row list, not a pass.
+ * is an error. A top-level error denies. Forms outside the subset the rows use (nodes, members of `request` and
+ * `resource`, key types) throw: a bug in the row list, not a pass.
  */
 
-const ERROR = Symbol('error')
-type V = unknown // a rules value, or ERROR
-
-class PathValue { constructor(readonly segments: string[]) {} }
-class Namespace { constructor(readonly name: 'firestore') {} }
 /** A function param or let: evaluated lazily, so an unused failing argument does not fail the call (the most permissive reading). */
 class Thunk {
   private value: V | undefined
@@ -70,39 +67,14 @@ function ident(name: string, env: Env): V {
     return v
   }
   const storeKey = store === 'firestore' ? 'data' : 'metadata'
+  const record = (what: string, data: Record<string, unknown> | undefined) => data === undefined ? null : new Members(what, { [storeKey]: data })
   if (name === 'request') {
     const auth = world.actor ? { uid: world.actor.uid, token: world.actor.claims } : null
-    return { auth, resource: world.incoming === undefined ? null : { [storeKey]: world.incoming } }
+    return new Members('request', { auth, resource: record('request.resource', world.incoming) })
   }
-  if (name === 'resource') return world.resource === undefined ? null : { [storeKey]: world.resource }
+  if (name === 'resource') return record('resource', world.resource)
   if (name === 'firestore' && store === 'storage') return new Namespace('firestore')
   throw new Error(`unsupported identifier ${name}`)
-}
-
-/** `v.key`: a field of a map; anything else (null, a missing key, a non-map) is an error. */
-function field(v: V, key: string): V {
-  if (v === ERROR || !isMap(v) || !Object.hasOwn(v, key)) return ERROR
-  return v[key]
-}
-
-function pathSegment(parts: PathPart[], env: Env): string | typeof ERROR {
-  let text = ''
-  for (const part of parts) {
-    if (part.kind === 'text') { text += part.value; continue }
-    const v = evaluate(part.expr, env)
-    if (typeof v === 'string') text += v
-    else if (typeof v === 'number' && Number.isInteger(v)) text += String(v)
-    else return ERROR
-  }
-  return text
-}
-
-/** The stored document a path names, or null when there is none. Only the default database exists. */
-function lookup(path: V, env: Env): Record<string, unknown> | null | typeof ERROR {
-  if (!(path instanceof PathValue)) return ERROR
-  const [databases, , documents, ...rest] = path.segments
-  if (databases !== 'databases' || documents !== 'documents' || rest.length === 0) return ERROR
-  return env.ctx.world.docs['/' + rest.join('/')] ?? null
 }
 
 function call(node: Extract<Node, { type: 'call' }>, env: Env): V {
@@ -110,7 +82,7 @@ function call(node: Extract<Node, { type: 'call' }>, env: Env): V {
   const { store, functions } = env.ctx
   if (callee.type === 'ident' && functions.has(callee.name)) {
     const fn = functions.get(callee.name)!
-    if (fn.params.length !== args.length) return ERROR
+    if (fn.params.length !== args.length) throw new Error(`${callee.name} called with ${args.length} arguments`)
     if (env.depth >= 20) return ERROR
     const bindings = new Map<string, Thunk>(fn.params.map((p, i) => [p, new Thunk(args[i]!, env)]))
     let inner: Env = { ctx: env.ctx, bindings, depth: env.depth + 1 }
@@ -121,14 +93,15 @@ function call(node: Extract<Node, { type: 'call' }>, env: Env): V {
     : callee.type === 'member' && evaluate(callee.object, env) instanceof Namespace ? callee.property
     : undefined
   if ((builtin === 'get' || builtin === 'exists') && args.length === 1) {
-    const doc = lookup(evaluate(args[0]!, env), env)
+    const doc = documentAt(evaluate(args[0]!, env), env.ctx.world.docs)
     if (doc === ERROR) return ERROR
-    return builtin === 'exists' ? doc !== null : doc === null ? null : { data: doc }
+    return builtin === 'exists' ? doc !== null : doc
   }
   if (callee.type === 'member' && callee.property === 'get' && args.length === 2) {
     const map = evaluate(callee.object, env)
     const key = evaluate(args[0]!, env)
     const fallback = evaluate(args[1]!, env)
+    if (Array.isArray(key) || map instanceof Members) throw new Error(`unsupported get at line ${node.line}`)
     if (!isMap(map) || typeof key !== 'string' || fallback === ERROR) return ERROR
     return Object.hasOwn(map, key) ? map[key] : fallback
   }
@@ -166,17 +139,19 @@ function evaluate(node: Node, env: Env): V {
     case 'path': {
       const segments: string[] = []
       for (const parts of node.segments) {
-        const s = pathSegment(parts, env)
-        if (s === ERROR) return ERROR
-        segments.push(s)
+        const text = segmentText(parts.map(part => (part.kind === 'text' ? part.value : evaluate(part.expr, env))))
+        if (text === ERROR) return ERROR
+        segments.push(text)
       }
       return new PathValue(segments)
     }
     case 'ident': return ident(node.name, env)
-    case 'member': return field(evaluate(node.object, env), node.property)
+    case 'member': return member(evaluate(node.object, env), node.property)
     case 'index': {
       const key = evaluate(node.index, env)
-      return typeof key === 'string' ? field(evaluate(node.object, env), key) : ERROR
+      if (key === ERROR) return ERROR
+      if (typeof key !== 'string') throw new Error(`unsupported index key at line ${node.line}`)
+      return member(evaluate(node.object, env), key)
     }
     case 'call': return call(node, env)
     case 'unary': {
