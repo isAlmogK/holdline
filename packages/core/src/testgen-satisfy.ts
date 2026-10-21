@@ -16,7 +16,8 @@ const stage = (a: Atom) => (a.op === 'exists' ? 2 : usesLookup(a) ? 1 : 0)
 export function freshWorld(rule: DataAccessRule): World {
   const params: Record<string, string> = {}
   if (rule.target.store !== 'postgres') concretize(rule.target.path, name => (params[name] = `${name}-1`))
-  const targetPath = rule.target.store === 'postgres' ? undefined : concretize(rule.target.path, p => params[p] ?? `${p}-1`)
+  // Only a Firestore record is a document: in Storage rules, `exists` and lookups read Firestore, never the object.
+  const targetPath = rule.target.store === 'firestore' ? concretize(rule.target.path, p => params[p] ?? `${p}-1`) : undefined
   return { actor: { uid: 'user-1', claims: {} }, params, resource: {}, incoming: {}, docs: [], counter: 0, targetPath, recordLookup: false }
 }
 

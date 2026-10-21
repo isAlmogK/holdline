@@ -520,4 +520,35 @@ describe('seed stores in storage test files', () => {
     expect(() => parseTestFile(text)).toThrow()
     expect(parseTestFile(text.replace('s3', 'storage')).cases[0]!.seed[0]!.store).toBe('storage')
   })
+  it('keeps a firestore doc on the object path apart from the object', () => {
+    const g = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'storage', path: '/orgs/{orgId}/files/{fileId}' },
+      ops: ['read', 'create'],
+      requires: { and: [
+        { atom: { op: 'authenticated' } },
+        { atom: { op: 'exists', doc: '/orgs/{param.orgId}/files/{param.fileId}' } },
+      ] },
+    }), vocab)!
+    const allowRead = g.cases.find(c => c.name === 'read: allowed when every condition holds')!
+    expect(allowRead.seed).toEqual([
+      { path: '/orgs/orgId-1/files/fileId-1', store: 'storage', data: {} },
+      { path: '/orgs/orgId-1/files/fileId-1', store: 'firestore', data: {} },
+    ])
+    const allowCreate = g.cases.find(c => c.name === 'create: allowed when every condition holds')!
+    expect(allowCreate.seed).toEqual([{ path: '/orgs/orgId-1/files/fileId-1', store: 'firestore', data: {} }])
+    expect(g.skipped).toEqual([])
+  })
+  it('keeps a lookup on the object path in the firestore doc, not the object metadata', () => {
+    const g = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'storage', path: '/orgs/{orgId}/files/{fileId}' },
+      ops: ['read'],
+      requires: { atom: { op: 'eq', left: 'doc(/orgs/{param.orgId}/files/{param.fileId}).owner', right: 'actor.uid' } },
+    }), vocab)!
+    expect(g.cases[0]!.seed).toEqual([
+      { path: '/orgs/orgId-1/files/fileId-1', store: 'storage', data: {} },
+      { path: '/orgs/orgId-1/files/fileId-1', store: 'firestore', data: { owner: 'user-1' } },
+    ])
+  })
 })
