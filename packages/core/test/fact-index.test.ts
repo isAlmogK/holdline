@@ -72,4 +72,52 @@ describe('FactIndex', () => {
   it('lists files with error diagnostics', () => {
     expect([...index.errorFiles()]).toEqual(['src/broken.ts'])
   })
+  it('reports a route without its own location at its handler location', () => {
+    expect(index.at('route:POST /dogs/:id/transfer')).toEqual({ symbol: 'route:POST /dogs/:id/transfer', file: 'src/routes.ts', line: 10 })
+  })
+})
+
+describe('FactIndex.coveredBy traversal', () => {
+  const edges = (calls: [string, string][]) => new FactIndex(parseFacts({ version: 1, calls }))
+
+  it('walks several hops up to a covered entry point', () => {
+    const idx = edges([
+      ['route.handler', 'svc.run'],
+      ['svc.run', 'repo.update'],
+    ])
+    expect(idx.coveredBy('repo.update', ['route.handler'])).toBe(true)
+    expect(idx.coveredBy('repo.update', ['unrelated'])).toBe(false)
+  })
+  it('is false when one path into the symbol is covered and another is not', () => {
+    const idx = edges([
+      ['covered', 'x'],
+      ['uncovered', 'x'],
+    ])
+    expect(idx.coveredBy('x', ['covered'])).toBe(false)
+  })
+  it('handles cycles: covered when a via node reaches the cycle, not when it is a pure cycle', () => {
+    const withRoot = edges([
+      ['A', 'B'],
+      ['B', 'A'],
+      ['root', 'B'],
+    ])
+    expect(withRoot.coveredBy('A', ['root'])).toBe(true)
+    const pure = edges([
+      ['A', 'B'],
+      ['B', 'A'],
+    ])
+    expect(pure.coveredBy('A', [])).toBe(false)
+  })
+  it('finishes quickly on a 25-layer diamond graph (no exponential blowup)', () => {
+    const layers = 25
+    const calls: [string, string][] = []
+    for (let i = 0; i < layers - 1; i++) {
+      for (const a of ['a', 'b']) {
+        for (const b of ['a', 'b']) calls.push([`L${i}${a}`, `L${i + 1}${b}`])
+      }
+    }
+    const idx = edges(calls)
+    const bottom = `L${layers - 1}a`
+    expect(idx.coveredBy(bottom, ['L0a', 'L0b'])).toBe(true)
+  })
 })
