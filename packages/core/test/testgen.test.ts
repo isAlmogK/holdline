@@ -161,3 +161,20 @@ describe('generateTests fails loudly instead of guessing', () => {
     expect(deny.do.data).toEqual({ deletedAt: null })
   })
 })
+
+describe('deny cases break only their own atom', () => {
+  it('sends broken incoming data on deny and satisfying data on allow', () => {
+    const r = rule({
+      type: 'data-access',
+      target: { store: 'firestore', path: '/dogs/{dogId}' },
+      ops: ['update', 'create'],
+      requires: { atom: { op: 'in', left: 'incoming.status', right: { literal: ['a', 'b'] } } },
+    })
+    const f = generateTests(r, vocab)!
+    for (const op of ['update', 'create']) {
+      const cases = f.cases.filter(c => c.do.op === op)
+      expect(cases.find(c => c.expect === 'allow')!.do.data).toEqual({ status: 'a' })
+      expect(cases.find(c => c.expect === 'deny')!.do.data).toEqual({ status: 'not-allowed' })
+    }
+  })
+})
