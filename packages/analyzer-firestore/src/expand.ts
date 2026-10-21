@@ -29,12 +29,26 @@ export function expandOps(ops: readonly AllowOp[]): Op[] {
   return OPS.filter(op => wanted.has(op))
 }
 
-function hasPrefix(store: Store, segs: readonly MatchSegment[]): boolean {
-  const [a, b, c] = segs
+/**
+ * How a concatenated match path relates to the document prefix (`/databases/{db}/documents`, Storage `/b/{bucket}/o`):
+ * - `prefix`: its first three segments can match the prefix (first and third: the literal or a single-segment
+ *   wildcard; second: any single segment, literal or wildcard), so they are stripped;
+ * - `covering`: a rest wildcard (or an interpolation) occurs within the first three segments after segments
+ *   that match, so the match can reach every document: its target is `/{<rest>=**}`;
+ * - `outside`: it cannot match the prefix.
+ */
+type PrefixFit = { kind: 'prefix' } | { kind: 'covering'; seg: MatchSegment } | { kind: 'outside' }
+
+function prefixFit(store: Store, segs: readonly MatchSegment[]): PrefixFit {
   const p = PREFIX[store]
-  return a?.kind === 'literal' && a.value === p.first
-    && b?.kind === 'wildcard' && !b.rest
-    && c?.kind === 'literal' && c.value === p.last
+  const expected = [p.first, undefined, p.last]
+  for (let i = 0; i < 3; i++) {
+    const s = segs[i]
+    if (!s) return { kind: 'outside' }
+    if (s.kind === 'interp' || (s.kind === 'wildcard' && s.rest)) return { kind: 'covering', seg: s }
+    if (s.kind === 'literal' && expected[i] !== undefined && s.value !== expected[i]) return { kind: 'outside' }
+  }
+  return { kind: 'prefix' }
 }
 
 class Expander {
@@ -54,7 +68,10 @@ class Expander {
   }
 
   private target(store: Store, segs: readonly MatchSegment[]): string {
-    return this.render(hasPrefix(store, segs) ? segs.slice(3) : segs)
+    const fit = prefixFit(store, segs)
+    if (fit.kind === 'prefix') return this.render(segs.slice(3))
+    if (fit.kind === 'covering') return this.render([fit.seg])
+    return this.render(segs)
   }
 
   service(svc: Service): void {
@@ -83,7 +100,7 @@ class Expander {
   private outsidePrefix(store: Store, m: Match, outer: readonly MatchSegment[]): boolean {
     const segs = [...outer, ...m.path]
     const relevant = m.body.allows.length > 0 || m.body.matches.length === 0
-    if (relevant && !hasPrefix(store, segs)) return true
+    if (relevant && prefixFit(store, segs).kind === 'outside') return true
     return m.body.matches.some(c => this.outsidePrefix(store, c, segs))
   }
 

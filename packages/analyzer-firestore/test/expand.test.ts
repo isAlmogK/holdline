@@ -78,10 +78,46 @@ service firebase.storage { match /b/{bucket}/o { match /files/{id} { allow read;
     const e = expand(`service firebase.storage { match /files/{id} { match /a { allow read; } match /b { allow read; } } }`)
     expect(e.warnings).toEqual(['match /files/{id} is not under /b/{bucket}/o'])
   })
-  it('does not treat a rest wildcard or a wrong literal as the prefix', () => {
-    expect(expand(`service cloud.firestore { match /databases/{d=**}/documents { allow read; } }`).warnings).toHaveLength(1)
+  it('does not treat a wrong literal as the prefix', () => {
     expect(expand(`service cloud.firestore { match /databases/{d}/docs { allow read; } }`).warnings).toHaveLength(1)
     expect(expand(`service cloud.firestore { match /db/{d}/documents { allow read; } }`).warnings).toHaveLength(1)
+    expect(expand(`service firebase.storage { match /b/{bucket}/objects/a { allow read; } }`).warnings).toHaveLength(1)
+  })
+  it('strips a prefix that names a literal database or bucket', () => {
+    const f = expand(`service cloud.firestore { match /databases/(default)/documents { match /users/{uid} { allow read; } } }`)
+    expect(f.allows[0]!.target).toBe('/users/{uid}')
+    expect(f.matches.map(m => m.target)).toEqual(['/', '/users/{uid}'])
+    expect(f.warnings).toEqual([])
+    const s = expand(`service firebase.storage { match /b/my-app.appspot.com/o { match /images/{id} { allow write; } } }`)
+    expect(s.allows[0]!.target).toBe('/images/{id}')
+    expect(s.warnings).toEqual([])
+  })
+  it('strips a prefix whose first or third segment is a single-segment wildcard, which can match it', () => {
+    const e = expand(`service cloud.firestore { match /{a}/{b}/{c}/users/{uid} { allow read; } }`)
+    expect(e.allows[0]!.target).toBe('/users/{uid}')
+    expect(e.warnings).toEqual([])
+  })
+  it('gives a rest wildcard within the prefix a target covering every document', () => {
+    const target = (src: string) => {
+      const e = expand(src)
+      expect(e.warnings).toEqual([])
+      return e.allows.map(a => a.target)
+    }
+    expect(target(`service cloud.firestore { match /databases/{db}/{rest=**} { allow read; } }`)).toEqual(['/{rest=**}'])
+    expect(target(`service cloud.firestore { match /databases/{d=**}/documents { allow read; } }`)).toEqual(['/{d=**}'])
+    expect(target(`service cloud.firestore { match /databases/{rest=**} { allow read; } }`)).toEqual(['/{rest=**}'])
+    expect(target(`service firebase.storage { match /b/{bucket}/{rest=**} { allow write; } }`)).toEqual(['/{rest=**}'])
+    expect(target(`service firebase.storage { match /b/my-bucket/{rest=**} { allow write; } }`)).toEqual(['/{rest=**}'])
+    expect(target(`service cloud.firestore { match /{path=**} { allow read; } }`)).toEqual(['/{path=**}'])
+    expect(target(`service cloud.firestore { match /databases/{db}/{rest=**} { match /x/{id} { allow read; } } }`)).toEqual(['/{rest=**}'])
+  })
+  it('gives an interpolated segment within the prefix a covering target', () => {
+    expect(expand(`service cloud.firestore { match /databases/$(x)/documents/a { allow read; } }`).allows[0]!.target).toBe('/{_interp1=**}')
+  })
+  it('still warns about a rest wildcard after a wrong literal', () => {
+    const e = expand(`service cloud.firestore { match /db/{rest=**} { allow read; } }`)
+    expect(e.allows[0]!.target).toBe('/db/{rest=**}')
+    expect(e.warnings).toHaveLength(1)
   })
   it('keeps the first MatchSite for a repeated target', () => {
     const e = expand(fs('match /a/{x} { allow read; }\n match /a/{x} { allow read; }'))
