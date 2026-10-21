@@ -3,3 +3,5 @@ node_modules/
 .holdline/cache/
 dist/
 coverage/
+.holdline/pending.yaml
+*.tsbuildinfo
