@@ -47,8 +47,10 @@ export async function testFiles(root: string, rules: Rule[], vocab: Map<string, 
       selected.push({ rule, file })
       continue
     }
-    // Only invariant cases read the facts, so other rules never trigger a scan.
-    const fresh = generateTests(rule, vocab, rule.type === 'invariant' ? await facts() : undefined)
+    // Invariant cases need the table or create policy; data-access allow cases also satisfy the op's policy.
+    // Other rule types generate nothing, so they never trigger a scan.
+    const usesFacts = rule.type === 'invariant' || rule.type === 'data-access'
+    const fresh = generateTests(rule, vocab, usesFacts ? await facts() : undefined)
     if (!fresh) continue
     await writeFileEnsured(join(testsDir(root), `${rule.id}.yaml`), serializeTestFile(fresh))
     selected.push({ rule, file: fresh, generated: file ? 'changed' : 'missing' })

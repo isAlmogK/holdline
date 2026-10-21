@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { parseTestFile } from '@holdline/core'
 import { describe, expect, it } from 'vitest'
 import { copyFixture, failedCases, runTestCommand as run } from './helpers/fixture.js'
 import { runCli } from './helpers/project.js'
@@ -22,8 +23,8 @@ describe('holdline test on postgres', () => {
     expect(json.files.every((f: { store: string }) => f.store === 'postgres')).toBe(true)
     expect(json.summary).toEqual({ passed: 20, failed: 0, rules: 7 })
     expect(existsSync(join(r.root, '.holdline/tests/R-004.yaml'))).toBe(true)
-    // A second run uses the files it wrote.
-    const again = await runCli(['test', '--facts', 'facts.json', '--format', 'json'], { cwd: r.root })
+    // A second run uses the files it wrote and loads no facts (this facts file does not exist).
+    const again = await runCli(['test', '--facts', 'missing.json', '--format', 'json'], { cwd: r.root })
     expect(again.code).toBe(0)
     expect(JSON.parse(again.stdout).files.every((f: { generated?: string }) => f.generated === undefined)).toBe(true)
   }, SLOW)
@@ -157,6 +158,21 @@ describe('holdline test on postgres', () => {
       files: [],
       infrastructure: [{ store: 'firestore', message: 'no firestore rules file found' }, { store: 'storage', message: 'no storage rules file found' }],
       summary: { passed: 0, failed: 0, rules: 0 },
+    })
+  })
+
+  it('generates data-access allow cases that satisfy the policy in the facts', async () => {
+    // --store postgres writes the firestore files without starting the emulator.
+    const root = await copyFixture('test-fb')
+    const r = await runCli(['test', '--facts', 'facts.json', '--format', 'json', '--rule', 'R-002', '--store', 'postgres'], { cwd: root })
+    expect(r.code, r.stderr).toBe(0)
+    const file = parseTestFile(await readFile(join(root, '.holdline/tests/R-002.yaml'), 'utf8'))
+    const data = Object.fromEntries(file.cases.map(c => [c.name, c.do.data]))
+    // The create policy also checks status, so every case sends a valid one; deny cases break only the rule's atoms.
+    expect(data).toEqual({
+      'create: allowed when every condition holds': { orgId: 'value-1', status: 'active' },
+      'create: denied without authenticated': { orgId: 'value-1', status: 'active' },
+      'create: denied without incoming.orgId in doc(/users/{actor.uid}).orgIds': { orgId: 'other-value', status: 'active' },
     })
   })
 
