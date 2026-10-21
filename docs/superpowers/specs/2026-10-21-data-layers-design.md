@@ -1,6 +1,6 @@
 # Holdline Phase 1: Data Layers
 
-**Status:** Step 0 implemented (2026-10-21). Tracks A, B and C are not built yet; see [As built (step 0)](#as-built-step-0).
+**Status:** Step 0 and Track A implemented (2026-10-21). Tracks B and C are not built yet; see [As built (step 0)](#as-built-step-0) and [As built (Track A)](#as-built-track-a).
 
 **Feature:** [Holdline feature and core design](2026-10-21-holdline-design.md) in this repo. This spec covers Phase 1 (spec 2 in the feature spec's table): the Postgres and Firestore/Storage analyzers and the database test runner.
 
@@ -374,3 +374,40 @@ Step 0 (section 2) is built. The reference docs ([facts](../../reference/facts.m
 
 **Known gap, owned by Track C:** in Storage test files, a Firestore document (`exists` or lookup) whose path equals the Storage object's path is merged into the object seed, which makes that allow case wrong. Track C fixes it first: the record merge applies only to Firestore targets.
 
+
+## As built (Track A)
+
+Track A (section 3, the Postgres part of sections 1 and 6.1) is built in `packages/analyzer-postgres` and
+`examples/golden-supabase`. The [fact graph reference](../../reference/facts.md#postgres-analyzer-packagesanalyzer-postgres)
+describes the code; this list records where it differs from sections 3, 6.1 and 8.
+
+| Section | As built |
+|---|---|
+| 3.1 Detect | `prisma/schema.prisma` alone also runs the analyzer, so it can report why there are no tables. All matched paths are sorted together. The dialect is `supabase` only when `postgres.dialect` says so or a matched path matches `supabase/migrations/*.sql`; a custom glob over Supabase migrations in another folder gives `plain`. |
+| 3.2 PGlite | PGlite 0.5.11 (Postgres 18) starts with the contrib extensions `uuid_ossp` and `pgcrypto`. Any other extension fails its migration with Postgres' own error (`extension "postgis" is not available`). |
+| 3.2 Shim | The claims setting is read as `nullif(current_setting('request.jwt.claims', true), '')`, because a rolled-back local setting reads as `''`. `uuid-ossp` and `pgcrypto` are created in schema `extensions`, and the session `search_path` is `"$user", public, extensions`, as in Supabase. `service_role` has `bypassrls`. `usage` on the four schemas and default privileges in `public` (all on tables, sequences and functions) go to `anon`, `authenticated` and `service_role`. `storage.buckets` and `storage.objects` exist. `auth.users` and `storage.*` get no table grants. |
+| 3.2 Failure | A failing migration yields only its error diagnostic, with ` (line N)` when Postgres gives a position. The output has no partial tables or policies. |
+| 3.2 Facts | Types are shortened (`timestamptz`, `varchar`, `char`, `timetz`, precision kept). A quoted literal default loses its cast. Foreign keys, unique constraints and checks are ordered by first key column, then name. Unique indexes count as uniques when they back no constraint and are neither partial nor on expressions (key columns only), listed after the constraints. A check's `expr` keeps Postgres' inner parentheses (`(amount > 0)`) and drops ` NOT VALID`. Partitioned tables are included. Postgres 18's NOT NULL constraints are ignored. |
+| 3.3 Ops | An UPDATE fact is its own `USING` AND the OR of the `WITH CHECK` of every permissive UPDATE policy on the table, not its own `USING` AND its own `WITH CHECK`: Postgres combines the two kinds of clause separately. |
+| 3.3 Roles | Not skipped: `anon`-only permissive policies become `and[not(authenticated), c]`, and `authenticated`-only ones `and[authenticated, c]`. A restrictive policy binds only the callers it covers: `or[not(authenticated), c]` for `authenticated`, `or[authenticated, c]` for `anon`. Policies only for other roles are still skipped with a warning. The plain dialect keeps permissive policies for any role and drops restrictive ones not for `public`. |
+| 3.3 Sign-in | `authenticated` is added when the condition is certainly false for an anonymous caller (a three-valued evaluation), not whenever it mentions `auth.uid()` or `auth.jwt()`. `auth.uid() IS NULL` and `IS NOT NULL` map to `not(authenticated)` and `authenticated`; other `actor.*` null tests are opaque. |
+| 3.3 Caller values | An anonymous Supabase caller carries the anon key's claims (`role`, `iss`, `ref`, `aud`, `iat`, `exp`), while the facts model it as no actor. So: comparisons on those claims are opaque; the role (`auth.role()` or the `role` claim) maps only for `=` a string or `IN` strings without `'anon'`, and `= 'anon'` gives `not(authenticated)`; other claims map only against plain string literals (not `'true'`, `'false'`, `'null'` or number-like text), and never with `<` or `>`. |
+| 3.3 Constants | Casts on constants are applied by type: numeric types give numbers (integer types only for integer values), numbers and booleans to text give their text, `uuid` lowercases, `bool` keeps booleans only. `citext`, type modifiers and array casts make the constant opaque. `lt` and `gt` map only against a number literal. `::text` on `auth.uid()` or a claim keeps the operand; other casts on non-constants are opaque. |
+| 3.3 Subqueries | `EXISTS` and `IN (SELECT …)` map only in positive position (under RLS on the inner table `exists` is too weak to negate). They are opaque with aggregate or computed targets, column alias lists, `ONLY`, joins, `ORDER BY`, `LIMIT` and similar clauses, a literal or an anon-key value as an operand (the doc format can't hold a literal), or names containing `& = ? { }`. Doc columns are sorted by name. |
+| 3.3 Helpers and names | Unqualified tables and functions resolve through the search path (`public`, `extensions` for Supabase; `public` for plain), and inside a helper through its own `SET search_path`. Names that exist in `pg_catalog` are never inlined. Overloaded helpers (same name and arity) are not inlined. Nesting stops at 10. The plain dialect does not map `auth.*`. |
+| 3.4 Locations | Tables at the latest `CREATE TABLE`, policies at the latest `CREATE POLICY`. `ALTER TABLE` statements are not used. |
+| 3.5 Cache | The key is the dialect plus every migration's path and content, so a renamed migration misses. A cached failure stays until a migration changes. Measured: 50 migrations cold in about 2.5 s. |
+| 3.6 Prisma | The `schema.prisma` diagnostic is a warning: diagnostics have no info severity. |
+| 6.1 Golden app | Twelve rules and breakages, see the [README](../../../examples/golden-supabase/README.md). Beyond the listed rules: projects are created only by members (R-003), organizations are read only by members (R-005), deleted projects are never readable (R-006). "Only admins read invoices" (R-004) uses a custom JWT claim `user_role`, because the `exists` doc format can't hold a literal such as `role = 'admin'`. It covers only the admin claim, not the policy's organization membership half. In a real app the claim would come from a custom access-token hook. The Next.js files are never built (no `tsconfig`). |
+| 8 Tracks | `applyMigrations(root, config, files?)` returns `MigrationRun { db, dialect, migrations, failure? }`; the caller closes `db`. `files` defaults to `listFiles(root)`. |
+| 9 Testing | Soundness runs each normalization against real Postgres in `test/soundness.test.ts`. `golden-ts-postgres` tables, locations included, come from its migration and match `fixtures/facts.json`. |
+| Shared files | Outside this track's folders: the root `package.json` `typecheck` script also checks `packages/analyzer-postgres`; `packages/cli/package.json` depends on `@holdline/analyzer-postgres`; `packages/cli/test/golden-patch.test.ts` gives each golden-app test 120 s. Plus the one import and array entry in `packages/cli/src/analyzers.ts`. |
+
+**Known limits:** each partition is also emitted as a table; a generated column's expression appears as its default;
+unique constraints and indexes are not merged by column position; `NO INHERIT` stays in a check's `expr`; integers
+above 2^53 lose precision and `float4` rounding is not modelled; a signed-in wrap plus a restriction can repeat
+`authenticated` in nested `and`s.
+
+**Flaky core test:** under the CPU load of the PGlite suites, the model-based prover property test in
+`packages/core/test/logic.test.ts` can exceed its 5 s timeout in a full `pnpm test` run. It passes alone. It needs a
+longer timeout in a core change.
