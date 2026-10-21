@@ -1,0 +1,13 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /orgs/{orgId}/files/{path=**} {
+      allow get: if request.auth != null
+        && firestore.exists(/databases/(default)/documents/orgs/$(orgId)/members/$(request.auth.uid));
+      allow list: if request.auth != null;
+      allow create: if request.auth != null && request.resource.metadata.kind == 'doc';
+      allow update: if request.auth != null && request.resource.metadata.kind == resource.metadata.kind;
+      allow delete: if request.auth != null && request.auth.uid == resource.metadata.owner;
+    }
+  }
+}

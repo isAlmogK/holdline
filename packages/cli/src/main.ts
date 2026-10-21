@@ -8,6 +8,7 @@ import { muteCommand } from './commands/mute.js'
 import { proposeCommand } from './commands/propose.js'
 import { reviewCommand } from './commands/review.js'
 import { scanCommand } from './commands/scan.js'
+import { testCommand } from './commands/test.js'
 import { UsageError, type Io } from './io.js'
 
 export type { Io } from './io.js'
@@ -29,6 +30,14 @@ export async function main(argv: string[], io: Io): Promise<number> {
     .option('--strict', 'also fail on stale or unknown rules')
     .option('--rule <ids...>', 'only these rules')
     .action((opts) => run(() => checkCommand(opts, io))())
+
+  program.command('test')
+    .description('Run the generated database test cases (.holdline/tests)')
+    .option('--rule <ids...>', 'only these rules')
+    .option('--store <store>', 'only postgres, firestore or storage')
+    .option('--format <format>', 'human or json', 'human')
+    .option('--facts <file>', 'facts for generating invariant cases, instead of scanning')
+    .action((opts) => run(() => testCommand(opts, io))())
 
   program.command('explain <id>')
     .description('Show a rule, its evidence and its current status')

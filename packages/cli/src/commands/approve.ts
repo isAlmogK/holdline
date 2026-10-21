@@ -1,13 +1,26 @@
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { approve, generateTests, reject, serializeTestFile, vocabularyMap, type RulesFile } from '@holdline/core'
+import {
+  approve, factsCachePath, generateTests, parseFacts, reject, serializeTestFile, vocabularyMap, type Facts, type RulesFile,
+} from '@holdline/core'
 import { UsageError, type Io } from '../io.js'
 import { approver, loadPending, loadRules, savePending, saveRules, testsDir, today, writeFileEnsured } from '../workspace.js'
 
+// The facts of the last scan, when there is a readable one: invariant cases need them.
+async function cachedFacts(root: string): Promise<Facts | undefined> {
+  try {
+    return parseFacts(JSON.parse(await readFile(factsCachePath(root), 'utf8')))
+  } catch {
+    return undefined
+  }
+}
+
 export async function writeTests(root: string, file: RulesFile, ids: string[]): Promise<void> {
   const vocab = vocabularyMap(file)
+  const facts = await cachedFacts(root)
   for (const id of ids) {
     const rule = file.rules.find(r => r.id === id)
-    const tests = rule ? generateTests(rule, vocab) : undefined
+    const tests = rule ? generateTests(rule, vocab, facts) : undefined
     if (tests) await writeFileEnsured(join(testsDir(root), `${id}.yaml`), serializeTestFile(tests))
   }
 }

@@ -1,6 +1,7 @@
-import { readFile, readdir, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { copyFixture } from './helpers/fixture.js'
 import { makeProject, runCli } from './helpers/project.js'
 
 const facts = JSON.stringify({
@@ -161,5 +162,18 @@ describe('inference flow', () => {
     expect(out.code).toBe(0)
     expect(out.stdout).toContain('No analyzer recognized this project')
     expect(JSON.parse(await readFile(join(root, '.holdline/cache/facts.json'), 'utf8')).version).toBe(1)
+  })
+
+  it('approve generates invariant cases from the cached facts of the last scan', async () => {
+    const root = await copyFixture('test-pg')
+    const without = await runCli(['approve', 'R-004'], { cwd: root })
+    expect(without.code, without.stderr).toBe(0)
+    expect(await readFile(join(root, '.holdline/tests/R-004.yaml'), 'utf8')).toContain('is not in the facts')
+    await mkdir(join(root, '.holdline/cache'), { recursive: true })
+    await copyFile(join(root, 'facts.json'), join(root, '.holdline/cache/facts.json'))
+    expect((await runCli(['approve', 'R-004'], { cwd: root })).code).toBe(0)
+    const tests = await readFile(join(root, '.holdline/tests/R-004.yaml'), 'utf8')
+    expect(tests).toContain('name: "create: rejects org_id null"')
+    expect(tests).toContain('skipped: []')
   })
 })

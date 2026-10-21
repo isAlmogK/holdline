@@ -1,0 +1,138 @@
+version: 1
+vocabulary: []
+rules:
+  - id: R-001
+    text: Only members of a project's org can read it
+    type: data-access
+    target:
+      store: postgres
+      table: public.projects
+    ops:
+      - read
+    requires:
+      and:
+        - atom:
+            op: authenticated
+        - atom:
+            op: exists
+            doc: pg:public.memberships?org_id={resource.org_id}&user_id={actor.uid}
+    evidence: []
+    status: approved
+    approved:
+      by: fixture
+      at: 2026-10-21
+      hash: a30910098536
+  - id: R-002
+    text: Only a project's owner can change or delete it
+    type: data-access
+    target:
+      store: postgres
+      table: public.projects
+    ops:
+      - update
+      - delete
+    requires:
+      and:
+        - atom:
+            op: authenticated
+        - atom:
+            op: eq
+            left: resource.owner_id
+            right: actor.uid
+    evidence: []
+    status: approved
+    approved:
+      by: fixture
+      at: 2026-10-21
+      hash: 2de601d905b7
+  - id: R-003
+    text: A project is created by its owner
+    type: data-access
+    target:
+      store: postgres
+      table: public.projects
+    ops:
+      - create
+    requires:
+      and:
+        - atom:
+            op: authenticated
+        - atom:
+            op: eq
+            left: incoming.owner_id
+            right: actor.uid
+    evidence: []
+    status: approved
+    approved:
+      by: fixture
+      at: 2026-10-21
+      hash: 9581264c3b99
+  - id: R-004
+    text: Every project belongs to an org
+    type: invariant
+    target:
+      store: postgres
+      table: public.projects
+    kind: not-null
+    columns:
+      - org_id
+    evidence: []
+    status: approved
+    approved:
+      by: fixture
+      at: 2026-10-21
+      hash: 7668fab7d363
+  - id: R-005
+    text: A project's org exists
+    type: invariant
+    target:
+      store: postgres
+      table: public.projects
+    kind: fk
+    columns:
+      - org_id
+    references:
+      table: public.orgs
+      columns:
+        - id
+    evidence: []
+    status: approved
+    approved:
+      by: fixture
+      at: 2026-10-21
+      hash: b1920c93d5bd
+  - id: R-006
+    text: A membership role is owner, admin or member
+    type: invariant
+    target:
+      store: postgres
+      table: public.memberships
+    kind: enum
+    columns:
+      - role
+    values:
+      - owner
+      - admin
+      - member
+    evidence: []
+    status: approved
+    approved:
+      by: fixture
+      at: 2026-10-21
+      hash: aff6c3aad7a0
+  - id: R-007
+    text: A user is a member of an org once
+    type: invariant
+    target:
+      store: postgres
+      table: public.memberships
+    kind: unique
+    columns:
+      - org_id
+      - user_id
+    evidence: []
+    status: approved
+    approved:
+      by: fixture
+      at: 2026-10-21
+      hash: ca04a0224371

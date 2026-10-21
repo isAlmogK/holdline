@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "tables": [
+    {
+      "id": "pg:public.orgs",
+      "name": "public.orgs",
+      "columns": [
+        { "name": "id", "type": "uuid", "nullable": false },
+        { "name": "name", "type": "text", "nullable": false }
+      ],
+      "primaryKey": ["id"],
+      "location": { "file": "supabase/migrations/0001_init.sql", "line": 1 }
+    },
+    {
+      "id": "pg:public.memberships",
+      "name": "public.memberships",
+      "columns": [
+        { "name": "org_id", "type": "uuid", "nullable": false },
+        { "name": "user_id", "type": "uuid", "nullable": false },
+        { "name": "role", "type": "text", "nullable": false }
+      ],
+      "primaryKey": ["org_id", "user_id"],
+      "foreignKeys": [{ "columns": ["org_id"], "references": { "table": "public.orgs", "columns": ["id"] } }],
+      "checks": [{ "name": "memberships_role_check", "expr": "(role = ANY (ARRAY['owner'::text, 'admin'::text, 'member'::text]))" }],
+      "location": { "file": "supabase/migrations/0001_init.sql", "line": 3 }
+    },
+    {
+      "id": "pg:public.projects",
+      "name": "public.projects",
+      "columns": [
+        { "name": "id", "type": "uuid", "nullable": false, "default": "gen_random_uuid()" },
+        { "name": "org_id", "type": "uuid", "nullable": false },
+        { "name": "owner_id", "type": "uuid", "nullable": false },
+        { "name": "title", "type": "text", "nullable": false },
+        { "name": "amount", "type": "integer", "nullable": false }
+      ],
+      "primaryKey": ["id"],
+      "foreignKeys": [{ "columns": ["org_id"], "references": { "table": "public.orgs", "columns": ["id"] } }],
+      "checks": [{ "name": "projects_amount_check", "expr": "(amount > 0)" }],
+      "rlsEnabled": true,
+      "location": { "file": "supabase/migrations/0001_init.sql", "line": 10 }
+    }
+  ]
+}

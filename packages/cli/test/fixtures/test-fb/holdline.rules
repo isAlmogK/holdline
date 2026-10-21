@@ -1,0 +1,85 @@
+version: 1
+vocabulary: []
+rules:
+  - id: R-001
+    text: Only members of a project's org can read it
+    type: data-access
+    target:
+      store: firestore
+      path: /projects/{projectId}
+    ops:
+      - read
+    requires:
+      and:
+        - atom:
+            op: authenticated
+        - atom:
+            op: exists
+            doc: /orgs/{resource.orgId}/members/{actor.uid}
+    evidence: []
+    status: approved
+    approved:
+      by: fixture
+      at: 2026-10-21
+      hash: 8c81c2515040
+  - id: R-002
+    text: A project is created only in one of the creator's orgs
+    type: data-access
+    target:
+      store: firestore
+      path: /projects/{projectId}
+    ops:
+      - create
+    requires:
+      and:
+        - atom:
+            op: authenticated
+        - atom:
+            op: in
+            left: incoming.orgId
+            right: doc(/users/{actor.uid}).orgIds
+    evidence: []
+    status: approved
+    approved:
+      by: fixture
+      at: 2026-10-21
+      hash: 6f70e37d2ce6
+  - id: R-003
+    text: Only members of an org can read its files
+    type: data-access
+    target:
+      store: storage
+      path: /orgs/{orgId}/files/{fileId}
+    ops:
+      - read
+    requires:
+      and:
+        - atom:
+            op: authenticated
+        - atom:
+            op: exists
+            doc: /orgs/{param.orgId}/members/{actor.uid}
+    evidence: []
+    status: approved
+    approved:
+      by: fixture
+      at: 2026-10-21
+      hash: fdd7d95a98ab
+  - id: R-004
+    text: A project's status is active or archived
+    type: invariant
+    target:
+      store: firestore
+      path: /projects/{projectId}
+    kind: enum
+    columns:
+      - status
+    values:
+      - active
+      - archived
+    evidence: []
+    status: approved
+    approved:
+      by: fixture
+      at: 2026-10-21
+      hash: cf52ebfe657e

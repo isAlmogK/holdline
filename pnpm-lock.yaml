@@ -63,6 +63,9 @@ importers:
       '@holdline/core':
         specifier: workspace:*
         version: link:../core
+      '@holdline/testkit':
+        specifier: workspace:*
+        version: link:../testkit
       commander:
         specifier: ^15.0.0
         version: 15.0.0
