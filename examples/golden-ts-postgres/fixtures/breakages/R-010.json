@@ -1,0 +1,1 @@
+{ "rule": "R-010", "description": "dogs.team_id loses its foreign key", "patch": [{ "op": "remove", "path": "/tables/2/foreignKeys/0" }] }

@@ -1,0 +1,1 @@
+{ "rule": "R-006", "description": "Team list stops filtering deleted teams", "patch": [{ "op": "remove", "path": "/dataOps/5/filters" }] }

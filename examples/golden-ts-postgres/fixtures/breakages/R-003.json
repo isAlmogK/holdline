@@ -1,0 +1,1 @@
+{ "rule": "R-003", "description": "New admin route without an admin check", "patch": [{ "op": "add", "path": "/routes/-", "value": { "id": "route:GET /admin/stats", "method": "GET", "path": "/admin/stats", "handler": "ts:src/routes/admin#stats", "middleware": ["ts:src/middleware/auth#requireAuth"], "framework": "express" } }] }

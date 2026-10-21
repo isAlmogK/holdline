@@ -1,0 +1,1 @@
+{ "rule": "R-012", "description": "users.email loses its unique constraint", "patch": [{ "op": "replace", "path": "/tables/0/uniques", "value": [] }] }

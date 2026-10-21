@@ -1,0 +1,1 @@
+{ "rule": "R-001", "description": "Transfer route loses its admin check", "patch": [{ "op": "remove", "path": "/guards/2" }] }

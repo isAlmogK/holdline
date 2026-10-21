@@ -1,0 +1,1 @@
+{ "rule": "R-005", "description": "findById stops filtering deleted dogs", "patch": [{ "op": "replace", "path": "/dataOps/1/filters", "value": { "atom": { "op": "eq", "left": "resource.id", "right": "param.id" } } }] }
