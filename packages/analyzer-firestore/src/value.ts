@@ -1,5 +1,6 @@
 import { OPERAND_PATTERN, type Literal } from '@holdline/core'
 import type { Node } from './ast.js'
+import { lookupArg, lookupPath } from './lookup-path.js'
 import type { Env } from './scope.js'
 
 export type Value =
@@ -51,6 +52,8 @@ function field(v: Value | undefined, name: string, ctx: NormalizeContext): Value
       default: return undefined
     }
   }
+  // A looked-up document gives only its fields; `.id` and `__name__` are not modelled.
+  if (v.kind === 'doc') return name === 'data' ? { kind: 'map', prefix: `doc(${v.path})`, auth: v.auth } : undefined
   if (!FIELD.test(name)) return undefined
   if (v.kind === 'map') return operand(`${v.prefix}.${name}`, v.auth)
   if (v.kind === 'operand' && !v.fallback) return operand(`${v.operand}.${name}`, v.auth)
@@ -62,8 +65,16 @@ function stringLiteral(node: Node, env: Env, ctx: NormalizeContext): string | un
   return v?.kind === 'literal' && typeof v.value === 'string' ? v.value : undefined
 }
 
-/** `x.get('f', d)` on a map or a fallback-free operand, with a literal `d`. Other calls are not values yet. */
+/**
+ * The built-in `get(P)` (Storage: `firestore.get(P)`) gives a `doc`; `x.get('f', d)` on a map or a
+ * fallback-free operand, with a literal `d`, gives a field with a fallback. Other calls are not values yet.
+ */
 function resolveCall(node: Extract<Node, { type: 'call' }>, env: Env, ctx: NormalizeContext): Value | undefined {
+  const lookup = lookupArg(node, 'get', env, ctx)
+  if (lookup) {
+    const p = lookupPath(lookup, env, ctx)
+    return p && { kind: 'doc', path: p.path, auth: p.auth }
+  }
   const { callee, args } = node
   if (callee.type !== 'member' || callee.property !== 'get' || args.length !== 2) return undefined
   const x = resolveValue(callee.object, env, ctx)
@@ -83,6 +94,7 @@ function resolveIdent(name: string, env: Env, ctx: NormalizeContext): Value | un
     return env.scope.isRestWildcard(name) ? undefined : operand(`param.${name}`, false)
   }
   if (name === 'request' || name === 'resource') return { kind: 'object', name }
+  if (name === 'firestore' && ctx.store === 'storage') return { kind: 'object', name }
   return undefined
 }
 
@@ -122,6 +134,10 @@ export function resolveValue(node: Node, env: Env, ctx: NormalizeContext): Value
     }
     case 'call':
       return resolveCall(node, env, ctx)
+    case 'path': {
+      const p = lookupPath(node, env, ctx)
+      return p && { kind: 'path', path: p.path, auth: p.auth }
+    }
     default:
       return undefined
   }

@@ -1,6 +1,7 @@
 import { FALSE, TRUE, type Expr } from '@holdline/core'
 import type { Node } from './ast.js'
 import { compareValues } from './compare.js'
+import { lookupArg, lookupPath } from './lookup-path.js'
 import type { Env } from './scope.js'
 import { resolveValue, type NormalizeContext, type Value } from './value.js'
 
@@ -71,6 +72,15 @@ export function normalizeCondition(node: Node, env: Env, ctx: NormalizeContext):
       const l = resolveValue(node.left, env, ctx)
       const r = resolveValue(node.right, env, ctx)
       return authCheck(node, l, r) ?? compareValues(node.op, l, r) ?? opaque(node, ctx)
+    }
+    case 'call': {
+      const arg = lookupArg(node, 'exists', env, ctx)
+      if (!arg) break
+      const p = lookupPath(arg, env, ctx)
+      if (!p) return opaque(node, ctx)
+      const atom: Expr = { atom: { op: 'exists', doc: p.path } }
+      // A path holding `{actor.` errors in Firestore for an anonymous caller.
+      return p.auth ? { and: [{ atom: { op: 'authenticated' } }, atom] } : atom
     }
   }
   // A bare value: a rules condition must be a boolean, so it holds exactly when it equals true.
