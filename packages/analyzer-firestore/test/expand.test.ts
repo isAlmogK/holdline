@@ -48,7 +48,7 @@ describe('expandRules', () => {
   })
   it('numbers interpolated segments per file', () => {
     const e = expand(fs('match /a/$(x) { allow read; } match /b/$(y) { allow read; }'))
-    expect(e.allows.map(a => a.target)).toEqual(['/a/{_interp1=**}', '/b/{_interp2}'])
+    expect(e.allows.map(a => a.target)).toEqual(['/a/{_interp1=**}', '/b/{_interp2=**}'])
   })
   it('ignores other services with a warning', () => {
     const e = expand(`service other.thing { match /a { allow read; } }`)
