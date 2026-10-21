@@ -14,5 +14,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The @emulator suites need the Firebase emulators: firebase-tools 15 needs Java 21 or later.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm install -g firebase-tools@15
       - run: pnpm typecheck
       - run: pnpm test
