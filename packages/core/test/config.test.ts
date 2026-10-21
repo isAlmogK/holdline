@@ -34,10 +34,26 @@ describe('loadConfig', () => {
     await expect(loadConfig(await project('postgres:\n  dialect: oracle\n'))).rejects.toThrow(ConfigError)
     await expect(loadConfig(await project('postgres: [\n'))).rejects.toThrow(/\.holdline\/config\.yaml/)
   })
+  it('rejects absolute globs and globs with a .. segment', async () => {
+    await expect(loadConfig(await project('postgres:\n  migrations: ["/etc/*.sql"]\n'))).rejects.toThrow(ConfigError)
+    await expect(loadConfig(await project('firestore:\n  rules: ["../other/firestore.rules"]\n'))).rejects.toThrow(ConfigError)
+    await expect(loadConfig(await project('storage:\n  rules: ["a/../../storage.rules"]\n'))).rejects.toThrow(ConfigError)
+    await expect(loadConfig(await project('storage:\n  rules: ["a/..b/storage.rules"]\n'))).resolves.toEqual({ storage: { rules: ['a/..b/storage.rules'] } })
+  })
+  it('treats an empty section as an empty section', async () => {
+    expect(await loadConfig(await project('postgres:\nfirestore:\n'))).toEqual({ postgres: {}, firestore: {} })
+  })
   it('scan passes the config to analyzers', async () => {
     const root = await project('firestore:\n  rules: [app.rules]\n')
     let seen: unknown
     const spy: Analyzer = { name: 'spy', version: '1', detect: () => true, analyze: async ctx => { seen = ctx.config; return {} } }
+    await scan(root, [spy])
+    expect(seen).toEqual({ firestore: { rules: ['app.rules'] } })
+  })
+  it('scan passes the config to detect', async () => {
+    const root = await project('firestore:\n  rules: [app.rules]\n')
+    let seen: unknown
+    const spy: Analyzer = { name: 'spy', version: '1', detect: (_r, _f, config) => { seen = config; return false }, analyze: async () => ({}) }
     await scan(root, [spy])
     expect(seen).toEqual({ firestore: { rules: ['app.rules'] } })
   })

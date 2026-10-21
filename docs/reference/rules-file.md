@@ -242,7 +242,8 @@ A vocabulary entry names a condition once so rules can say `{ ref: <id> }`.
 | `approved` | `{ by, at, hash }`, optional | Written by `approve`; never by hand. Not allowed in proposals or `.holdline/pending.yaml` |
 
 `recognize` tells an analyzer which function or symbol means this predicate, so it emits `{ ref: <id> }` instead
-of `opaque`. Core only stores and validates the field; the analyzers act on it.
+of `opaque`. Core stores and validates the field and hands the approved entries' recognizers to the analyzers
+(`AnalyzerContext.recognizers`, see facts.md); the analyzers act on it.
 
 Expansion: `expand` replaces each `ref` with the entry's `expr`, recursively. An unknown id becomes
 `opaque "unknown predicate ..."`, and a cycle becomes `opaque "circular predicate ..."`; an `opaque` never

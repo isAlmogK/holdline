@@ -3,12 +3,19 @@ import { join } from 'node:path'
 import YAML from 'yaml'
 import { z } from 'zod'
 
-const Globs = z.array(z.string().min(1)).min(1)
+// Globs are matched against the repo-relative file list (`matchFiles`), so they cannot leave the repo.
+const Glob = z.string().min(1)
+  .refine(g => !/^([/\\]|[A-Za-z]:)/.test(g), 'globs are relative to the repository root, not absolute')
+  .refine(g => !g.split('/').includes('..'), 'globs cannot contain a .. segment')
+const Globs = z.array(Glob).min(1)
+
+// A section with no body (`postgres:` alone) is YAML null: treat it as an empty section.
+const section = <T extends z.ZodType>(schema: T) => z.preprocess(v => (v === null ? {} : v), schema).optional()
 
 export const HoldlineConfigSchema = z.looseObject({
-  postgres: z.strictObject({ migrations: Globs.optional(), dialect: z.enum(['supabase', 'plain']).optional() }).optional(),
-  firestore: z.strictObject({ rules: Globs.optional() }).optional(),
-  storage: z.strictObject({ rules: Globs.optional() }).optional(),
+  postgres: section(z.strictObject({ migrations: Globs.optional(), dialect: z.enum(['supabase', 'plain']).optional() })),
+  firestore: section(z.strictObject({ rules: Globs.optional() })),
+  storage: section(z.strictObject({ rules: Globs.optional() })),
 })
 export type HoldlineConfig = z.output<typeof HoldlineConfigSchema>
 

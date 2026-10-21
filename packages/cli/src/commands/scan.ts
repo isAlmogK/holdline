@@ -1,11 +1,10 @@
-import { factsCachePath, scan } from '@holdline/core'
+import { factsCachePath } from '@holdline/core'
 import { relative } from 'node:path'
-import { analyzers } from '../analyzers.js'
 import type { Io } from '../io.js'
-import { writeFileEnsured } from '../workspace.js'
+import { scanProject, writeFileEnsured } from '../workspace.js'
 
 export async function scanCommand(io: Io): Promise<number> {
-  const { facts, ran } = await scan(io.cwd, analyzers)
+  const { facts, ran } = await scanProject(io.cwd)
   const path = factsCachePath(io.cwd)
   await writeFileEnsured(path, JSON.stringify(facts, null, 2))
   if (ran.length === 0) {

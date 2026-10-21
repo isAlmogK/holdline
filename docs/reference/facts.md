@@ -1,7 +1,7 @@
 # Fact graph reference
 
 The fact graph is what every analyzer emits and every checker reads. This page describes the code as built.
-Sources: `packages/core/src/facts.ts`, `expr.ts`, `paths.ts`, `logic.ts`, `fact-index.ts`, `analyzer.ts`, `config.ts`, `scan.ts`.
+Sources: `packages/core/src/facts.ts`, `expr.ts`, `paths.ts`, `logic.ts`, `fact-index.ts`, `analyzer.ts`, `config.ts`, `files.ts`, `scan.ts`.
 Worked example: `examples/golden-ts-postgres/fixtures/facts.json`.
 
 All schemas are zod `strictObject`s: an unknown key is an error. `parseFacts(json, source)` throws `FactsError`
@@ -318,10 +318,13 @@ and a file that failed to parse removes facts from that set, so the rule could p
 interface Analyzer {
   name: string
   version: string
-  detect(root: string, files: readonly string[]): boolean | Promise<boolean>
+  detect(root: string, files: readonly string[], config: HoldlineConfig): boolean | Promise<boolean>
   analyze(ctx: AnalyzerContext): Promise<AnalyzerOutput>
 }
-interface AnalyzerContext { root: string; files: readonly string[]; cache: FileCache; config: HoldlineConfig }
+interface AnalyzerContext {
+  root: string; files: readonly string[]; cache: FileCache; config: HoldlineConfig
+  recognizers: { id: string; recognize: VocabularyEntry['recognize'] }[]
+}
 type AnalyzerOutput = Omit<FactsInput, 'version' | 'analyzers'>
 ```
 
@@ -329,7 +332,8 @@ type AnalyzerOutput = Omit<FactsInput, 'version' | 'analyzers'>
 |---|---|
 | `files` | Repo-relative paths from `listFiles(root)`: `git ls-files --cached --others --exclude-standard` minus deleted files, minus any path with a segment in `node_modules .git .holdline dist build .venv vendor .next .svelte-kit`. Without git, a directory walk with the same skips. Sorted |
 | `cache` | `FileCache`, see below. Bump `version` when output changes |
-| `config` | `HoldlineConfig` from `.holdline/config.yaml`, loaded once per scan by `scan` (see "Project config" below). Each analyzer reads only its own section and applies its own defaults when the section is absent |
+| `config` | `HoldlineConfig` from `.holdline/config.yaml`, loaded once per scan by `scan` (see "Project config" below) and passed to both `detect` and `analyze`. Each analyzer reads only its own section and applies its own defaults when the section is absent |
+| `recognizers` | The `recognize` lists of the approved vocabulary entries (`approvedRecognizers(file)`: entries whose `approved.hash` equals `hashVocabulary(entry)` and whose `recognize` is not empty), as `{ id, recognize }`. `scan(root, analyzers, { recognizers })` passes them (default `[]`); the CLI reads them from `holdline.rules` when it scans (`holdline scan` and every command that scans), and passes none when the file is missing or invalid. An analyzer that uses them must include them in its cache key, for example by hashing the recognizers JSON together with the file content, since the same file gives different facts under different recognizers |
 | Output | An object of the list fields only. `scan` adds `version: 1` and `analyzers: [{ name, version }]` and validates with `parseFacts` |
 | Core imports no language tooling | Go and Python helpers run as child processes and print facts JSON on stdout |
 
@@ -343,10 +347,22 @@ Optional. `loadConfig(root)` in `config.ts` reads `<root>/.holdline/config.yaml`
 | `firestore` | `rules` (glob list) | |
 | `storage` | `rules` (glob list) | |
 
-A glob list is a non-empty array of non-empty strings. Unknown keys inside a known section are an error. Unknown top-level
+A glob list is a non-empty array of non-empty strings. A glob is a root-relative POSIX pattern: an absolute glob (leading `/` or `\`, or a drive letter) or one with a `..` segment is a `ConfigError`. A section with no body (`postgres:` alone, YAML null) is an empty section (`{}`). Unknown keys inside a known section are an error. Unknown top-level
 sections are kept (so a later analyzer can read its own section). Bad YAML or bad values throw `ConfigError`, whose
 message names `.holdline/config.yaml`; `holdline` exits 2 on it. `scan` loads the config before it runs any analyzer and
 does not catch a `ConfigError`: it is a config error, not an analyzer failure, so it never becomes a diagnostic.
+
+### Matching globs (`files.ts`)
+
+`matchFiles(files, globs)` returns the files that match any glob, sorted and without duplicates. Analyzers match
+their config globs against `ctx.files` (the git-aware list), never the disk, so ignored and skipped files never match.
+
+| Glob syntax | Matches |
+|---|---|
+| `*` | Any characters within one path segment (`*.sql` matches `schema.sql`, not `db/a.sql`) |
+| `**` as a whole segment | Any number of segments, including zero (`**/firestore.rules` matches `firestore.rules` and `packages/app/firestore.rules`; `db/**/*.sql` matches `db/a.sql` and `db/x/y/b.sql`) |
+| `?` | One character other than `/` |
+| anything else | Itself |
 
 ### FileCache (`cache.ts`)
 
@@ -358,7 +374,7 @@ does not catch a `ConfigError`: it is a config error, not an analyzer failure, s
 
 The key is the file content, not its path, so a renamed file with the same content hits the cache.
 
-`scan(root, analyzers)` returns `{ facts, ran }` and never throws for analyzer problems (it throws `ConfigError` for a bad
+`scan(root, analyzers, opts?)` returns `{ facts, ran }` and never throws for analyzer problems (it throws `ConfigError` for a bad
 config file, see "Project config"). Each analyzer failure becomes a facts
 part with one diagnostic `{ analyzer, file: '', severity: 'error', message }`:
 

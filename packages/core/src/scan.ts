@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { readdir } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { promisify } from 'node:util'
-import type { Analyzer } from './analyzer.js'
+import type { Analyzer, AnalyzerRecognizer } from './analyzer.js'
 import { FileCache } from './cache.js'
 import { loadConfig } from './config.js'
 import { FactsError, emptyFacts, mergeFacts, parseFacts, type Facts } from './facts.js'
@@ -46,7 +46,12 @@ export async function listFiles(root: string): Promise<string[]> {
   return out.sort()
 }
 
-export async function scan(root: string, analyzers: readonly Analyzer[]): Promise<{ facts: Facts; ran: string[] }> {
+export async function scan(
+  root: string,
+  analyzers: readonly Analyzer[],
+  opts: { recognizers?: AnalyzerRecognizer[] } = {},
+): Promise<{ facts: Facts; ran: string[] }> {
+  const recognizers = opts.recognizers ?? []
   const files = await listFiles(root)
   // Outside the analyzer try/catch on purpose: a bad config is a usage error (exit 2), not an analyzer failure.
   const config = await loadConfig(root)
@@ -61,7 +66,7 @@ export async function scan(root: string, analyzers: readonly Analyzer[]): Promis
   for (const analyzer of analyzers) {
     let applies: boolean
     try {
-      applies = await analyzer.detect(root, files)
+      applies = await analyzer.detect(root, files, config)
     } catch (e) {
       ran.push(analyzer.name)
       parts.push(failed(analyzer, `analyzer failed during detect: ${errorMessage(e)}`))
@@ -70,7 +75,7 @@ export async function scan(root: string, analyzers: readonly Analyzer[]): Promis
     if (!applies) continue
     ran.push(analyzer.name)
     try {
-      const output = await analyzer.analyze({ root, files, cache, config })
+      const output = await analyzer.analyze({ root, files, cache, config, recognizers })
       parts.push(parseFacts({ version: 1, ...output, analyzers: [{ name: analyzer.name, version: analyzer.version }] }, analyzer.name))
     } catch (e) {
       parts.push(e instanceof FactsError ? failed(analyzer, `invalid facts: ${e.message}`) : failed(analyzer, `analyzer failed: ${errorMessage(e)}`))
