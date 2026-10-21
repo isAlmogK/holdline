@@ -1,8 +1,10 @@
 import type { Expr } from '@holdline/core'
 import type { CatalogIndex } from './catalog.js'
 import { atomExpr, SIGNED_IN } from './atoms.js'
+import { inlineCall } from './inline.js'
 import { operand } from './operand.js'
 import type { SqlParse } from './pgparse.js'
+import { existsSubquery, inSubquery } from './subquery.js'
 import { tableScope, type Scope, type Side } from './scope.js'
 import { bareSelectTarget, constant, kindOf, nameList, nodeText, type SqlNode } from './sql-ast.js'
 
@@ -56,9 +58,11 @@ export function toExpr(node: SqlNode, env: NormalizeEnv): Expr {
         const inner = bareSelectTarget(f.subselect)
         return inner ? toExpr(inner, env) : opaque()
       }
-      return opaque() // Task 6: EXISTS and IN subqueries
+      if (f.subLinkType === 'EXISTS_SUBLINK') return existsSubquery(f.subselect, env) ?? opaque()
+      if (f.subLinkType === 'ANY_SUBLINK') return inSubquery(f, env) ?? opaque()
+      return opaque()
     }
-    case 'FuncCall': return opaque() // Task 6: helper function inlining
+    case 'FuncCall': return inlineCall(f, env) ?? opaque()
     default: return opaque()
   }
 }

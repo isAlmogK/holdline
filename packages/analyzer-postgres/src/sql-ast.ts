@@ -30,7 +30,7 @@ export function constant(node: SqlNode | undefined): { value: Literal } | undefi
     const inner = constant(f.arg)
     if (!inner) return inner
     const type = nameList(f.typeName?.names).at(-1) ?? ''
-    if (f.typeName?.typmods) return undefined
+    if (f.typeName?.typmods || f.typeName?.arrayBounds) return undefined // `'{a,b}'::text[]` is an array, not the string
     const v = inner.value
     if (v === null) return inner
     if (typeof v === 'number') {

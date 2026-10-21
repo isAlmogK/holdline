@@ -33,6 +33,8 @@ describe('constant', () => {
     expect(constant(expr(`'a'::character(3)`))).toBeUndefined()
     expect(constant(expr(`'t'::boolean`))).toBeUndefined()
     expect(constant(expr(`x`))).toBeUndefined()
+    expect(constant(expr(`'{a,b}'::text[]`))).toBeUndefined()
+    expect(constant(expr(`'{1}'::integer[]`))).toBeUndefined()
   })
 })
 
