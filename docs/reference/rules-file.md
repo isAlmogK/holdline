@@ -200,7 +200,7 @@ parse time and, if constructed in code, reported as a violation ("not supported 
 | Status | When |
 |---|---|
 | `unapproved-edit` | No `approved` block, or its hash differs from `hashRule(rule, vocab)` |
-| `unknown` | Error diagnostics touch the rule (analyzer crash, evidence files, files the target depends on, `.rules` files for Firestore and Storage targets, `.sql` files for Postgres targets). See facts.md "Diagnostics and unknown" |
+| `unknown` | Error diagnostics make the facts unreliable for the rule: for an `access` rule on a `symbol`, an analyzer crash, missing evidence, or an error in its symbol's or evidence's files; for every other rule, any error diagnostic. See facts.md "Diagnostics and unknown" |
 | `stale` | The target is not in the facts |
 | `violation` | One result per failing item |
 | `pass` | Everything is proven |

@@ -1,6 +1,6 @@
 # Holdline: Feature and Core Design
 
-**Status:** Draft (2026-10-21)
+**Status:** Phase 0 implemented (2026-10-21). Phases 1 to 5 are not built yet; see [As built](#as-built-phase-0).
 
 **Repos:** holdline (this spec: the feature and the core) · dogbase (adoption, its own spec in that repo, written after Phase 1)
 
@@ -491,3 +491,22 @@ Made while brainstorming on 2026-10-21, and where they differ from the first imp
 | Benchmark at launch: 5 golden apps, not 20 apps | Enough for a credible, reproducible headline; grow it after launch |
 | Flask moves to v0.2 | Smallest loss among the Python frameworks |
 | The DogBase reference set stays private | It describes a private codebase |
+
+## As built (Phase 0)
+
+Phase 0 built `packages/core`, `packages/cli`, the `golden-ts-postgres` acceptance fixture and the reference docs ([facts](../../reference/facts.md), [rules file](../../reference/rules-file.md)). The reference docs are the current truth for the contracts; this list records where the code differs from the sections above.
+
+| Section | As built |
+|---|---|
+| 4 Analyzer contract | `detect(root, files)` also receives the file list; `analyze(ctx)` takes one context (`root`, `files`, `cache`). A crash in `detect` or `analyze`, or output that fails the fact schema, becomes an error diagnostic with `file: ''`. |
+| 5.3 Predicates | Only `authenticated`, `exists` on the actor, and actor-to-literal `eq`/`in` (non-null string or number, non-empty array) imply `authenticated`; an anonymous actor is null. Analyzers for stores that deny anonymous callers (Firestore rules, RLS) emit an explicit `authenticated` atom. Equal atoms always imply each other; only array literals are sets for `in`. Unaligned policy params are renamed to fresh names before comparison. |
+| 5.1 / 5.2 Paths and routes | Malformed brace segments in path patterns count as wildcards. Route paths use `:name` params; `{x}`, `<x>` and `<type:x>` are normalized. Postgres `exists` docs use `pg:<table>?<col>={<operand>}&…`. Policies use store `pg-rls` while data ops use `postgres`. |
+| 6 Rule model | `approved.hash` covers the rule with `requires` expanded through the vocabulary, so editing a predicate needs re-approval of every rule using it. `status`, `muted` and `evidence` are not hashed; instead `status: pending` is rejected inside `holdline.rules`, `muted` needs a `muted` block, and muted rules are listed in every output. Vocabulary entries carry their own `approved` hash over `id`, `text`, `expr` and `recognize`; an unapproved or edited entry reports `unapproved-edit` as `vocabulary:<id>`. `lastRuleId` keeps rule ids from being reused. `kind: check` requires `expr`. |
+| 7.2 Checkers | `visibility` checks every read and list of the target, not only those reachable from a route (stricter). `flow` and `visibility` use "every call path into the operation passes a `via` symbol"; a `via` entry covers its members (`<via>.`), and a cycle with no `via` node is uncovered. Firestore and Storage invariants support only `not-null` and `enum` (checked by implication on write rules); `fk`, `unique` and `check` are Postgres-only. |
+| 7.3 Tests | Generated only for `data-access` rules in Phase 0; `expect: reject` exists in the format for invariant cases, which Phase 1 generates. Seeds are a list of `{ path, data }`. Generation skips (and says why) any requirement it cannot build exact worlds for: `or`, `not`, `opaque`, `ne`/`lt`/`gt`, literal or `actor.uid`/`param` targets, conflicting atoms, unset placeholders, dotted fields, `create` reading the stored record, `list` reading the stored record. |
+| 9.1 Results | `at.file` and `at.line` are optional (some facts have no location). `unknown` replaces pass, violation and stale: an `access` rule on a `symbol` becomes unknown when an error touches its files; every other rule becomes unknown when any error diagnostic exists (conservative until per-store attribution lands). |
+| 9.2 Exit codes | `check` exits 3 after printing results when an analyzer crashed (an error diagnostic with `file: ''`). Malformed `.holdline/pending.yaml`, a missing proposals file and `--rule` with an unknown id exit 2. |
+| 8 Inference | `--budget` is enforced as a hard cap; a budget smaller than the instructions and schema is a usage error. `propose` also reports proposals it skipped because they duplicate a pending rule or redefine pending vocabulary. |
+| 11 Golden apps | Only `golden-ts-postgres` exists, with hand-written facts. Its README fixes the conventions analyzers must reproduce: filters reference the function's own parameters, `where` clauses become filters on every operation, every referenced class or function is a symbol, `location.line` is the declaration line. |
+
+**Left for later phases:** per-language `via` member boundaries (decided by each analyzer track), per-store attribution of diagnostics (to narrow `unknown`), how analyzer packages register in `packages/cli/src/analyzers.ts`, and flagging `holdline mute` or `holdline approve` run by an agent (spec 4).
