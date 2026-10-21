@@ -17,7 +17,7 @@
 - No model decides pass/fail. When a condition cannot be mapped exactly, it is `{ opaque: <source text> }`. Never drop a policy silently: a policy that is dropped means "denied", which can make a rule pass falsely.
 - **Soundness invariant (all normalization):** for every request, if Firestore evaluates the source condition to `true`, the emitted `Expr` evaluates to `true` in the Holdline model (absent field = `null`; atoms reading the actor are false for an anonymous caller). Proof sketch the code relies on: every atom mapping is exact on non-error values, `&&`/`||`/`!`/`?:` map structurally, and Firestore errors never evaluate to `true` at the top.
 - Commits: conventional commits on branch `claude/phase-1-firestore-61785b`, never on `main`. End each commit message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-- **Privacy:** nothing from DogBase (`~/Engineering/DogBase/dogbase`) enters this repo: no code, rules, field names, collection names, paths or findings in code, tests, fixtures, docs, commit messages or PR text. Every example is invented.
+- **Privacy:** nothing from DogBase (the private checkout) enters this repo: no code, rules, field names, collection names, paths or findings in code, tests, fixtures, docs, commit messages or PR text. Every example is invented.
 - Files this track owns: `packages/analyzer-firestore/**`, `examples/golden-firebase/**`, one import + one array entry in `packages/cli/src/analyzers.ts`, the summary line in `packages/cli/src/commands/scan.ts` (+ a new `packages/cli/src/format/policy-summary.ts`), the Firestore rows of `docs/reference/*.md`, the spec's "As built (Track B)" section. Shared one-liners also touched: root `package.json` (`typecheck`), `packages/cli/package.json` (dependency), `pnpm-lock.yaml`, and one assertion in `packages/cli/test/golden-patch.test.ts`.
 - Commands: `pnpm test`, `pnpm typecheck`, `pnpm vitest run <path>` for one file, `pnpm holdline <command>`.
 
@@ -1501,10 +1501,10 @@ Run by the controller session, not a subagent, because it reads a private reposi
 
 - [ ] **Step 1: Run the gate**:
 ```bash
-test -d ~/Engineering/DogBase/dogbase/.holdline && echo "has .holdline" || echo "no .holdline"
-cd ~/Engineering/DogBase/dogbase && node --import tsx/esm <worktree>/packages/cli/src/bin.ts scan
+test -d <dogbase checkout>/.holdline && echo "has .holdline" || echo "no .holdline"
+cd <dogbase checkout> && node --import tsx/esm <worktree>/packages/cli/src/bin.ts scan
 ```
-(If `tsx/esm` cannot be resolved from that directory, use `pnpm --dir <worktree> exec tsx <worktree>/packages/cli/src/bin.ts scan` with `cwd` set via `cd` first — the CLI scans `process.cwd()`.) Afterwards delete `~/Engineering/DogBase/dogbase/.holdline` if it did not exist before.
+(If `tsx/esm` cannot be resolved from that directory, use `pnpm --dir <worktree> exec tsx <worktree>/packages/cli/src/bin.ts scan` with `cwd` set via `cd` first — the CLI scans `process.cwd()`.) Afterwards delete `<dogbase checkout>/.holdline` if it did not exist before.
 - [ ] **Step 2: Zero error diagnostics.** Read `.holdline/cache/facts.json` diagnostics before deleting. Any parse error is a parser gap: write a failing parser test with an invented minimal example of the same construct, fix, rerun.
 - [ ] **Step 3: Review the opaque summary privately** (stdout of scan). Group the opaque texts into general Firestore patterns (for example `x is string`, `request.time` comparisons, `keys().hasOnly(...)`, `size()` checks). For the most common patterns that have an exact or polarity-safe mapping, add a normalization row with an invented example, a unit test, and a soundness row. Candidate: `x is <type>` in positive polarity implies `x != null` — only sound where the expression is not under `!` or a ternary test, so it needs a polarity flag in `normalizeCondition` (positive by default; `!` flips; a ternary test is both, so no weakening there). List the rest generically in As built.
 - [ ] **Step 4: Report the opaque summary to the user in the session only.**
