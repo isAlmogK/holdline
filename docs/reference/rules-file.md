@@ -436,6 +436,7 @@ Per op, only that op is skipped (the others are still generated) and the reason 
 |---|---|
 | `create` and an atom reads the stored record (`resource.*`, an `exists` doc or lookup path containing `{resource.`, or an `exists` or lookup of the target document) | `create: the condition reads the stored record, which does not exist on create` |
 | A deny case that would have to break more than one atom (every pin makes another atom false), for example `exists(P)` together with a lookup on `P`: the case for that atom only | `<op>: cannot deny only <atom> (other conditions depend on the same values)` |
+| `read`, `list` or `delete` and an atom reads `incoming.*` (directly, or in an `exists` doc or lookup path). Only `create` and `update` send data, so the allow and deny cases would differ only in `expect` | `<op>: the condition reads the incoming write, which <op> does not send` |
 | `list` and the satisfied record has fields | `list: needs query filters to test; read cases cover the condition` |
 
 Parse and write with `parseTestFile` / `serializeTestFile`.

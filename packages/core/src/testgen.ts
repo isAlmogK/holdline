@@ -26,7 +26,12 @@ export function generateTests(rule: Rule, vocab: Vocabulary): TestFile | undefin
     if (unmet) throw new Unsupported(`cannot satisfy ${formatAtom(unmet)} together with the other conditions`)
     const readsRecord = satisfied.recordLookup || atoms.some(readsStoredRecord)
     const denies = atoms.map((_, i) => denyWorld(atoms, i, rule, satisfied))
+    const readsWrite = atoms.some(readsIncoming)
     for (const op of rule.ops) {
+      if (readsWrite && (op === 'read' || op === 'list' || op === 'delete')) {
+        base.skipped.push(`${op}: the condition reads the incoming write, which ${op} does not send`)
+        continue
+      }
       if (op === 'list' && Object.keys(satisfied.resource).length > 0) {
         base.skipped.push('list: needs query filters to test; read cases cover the condition')
         continue
@@ -72,11 +77,16 @@ function storePath(rule: DataAccessRule): string {
   return rule.target.store === 'postgres' ? rule.target.table.includes('.') ? rule.target.table : `public.${rule.target.table}` : targetPath(rule)
 }
 
-function readsStoredRecord(a: Atom): boolean {
-  const isResource = (o: unknown) =>
-    typeof o === 'string' && (o.startsWith('resource.') || (isLookupOperand(o) && o.includes('{resource.')))
-  if (a.op === 'exists') return a.doc.includes('{resource.')
+// True when an atom reads `<root>.*` directly or in a lookup or `exists` path placeholder.
+function reads(a: Atom, root: 'resource' | 'incoming'): boolean {
+  const mentions = (o: unknown) =>
+    typeof o === 'string' && (o.startsWith(`${root}.`) || (isLookupOperand(o) && o.includes(`{${root}.`)))
+  if (a.op === 'exists') return a.doc.includes(`{${root}.`)
   if (a.op === 'authenticated') return false
-  if (a.op === 'isNull') return isResource(a.operand)
-  return Object.values(a).some(isResource)
+  if (a.op === 'isNull') return mentions(a.operand)
+  return Object.values(a).some(mentions)
 }
+
+const readsStoredRecord = (a: Atom) => reads(a, 'resource')
+// Only create and update send data, so a condition on it cannot be tested on read, list or delete.
+const readsIncoming = (a: Atom) => reads(a, 'incoming')

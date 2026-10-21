@@ -389,3 +389,29 @@ describe('exists on the record under test', () => {
     expect(holds(w, atom, 'create')).toBe(false)
   })
 })
+
+describe('ops that send no data', () => {
+  it('skips read, list and delete when a condition reads the incoming write', () => {
+    const f = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'firestore', path: '/dogs/{dogId}' },
+      ops: ['read', 'update', 'delete'],
+      requires: { atom: { op: 'eq', left: 'incoming.status', right: { literal: 'active' } } },
+    }), vocab)!
+    expect(f.cases.map(c => [c.do.op, c.expect])).toEqual([['update', 'allow'], ['update', 'deny']])
+    expect(f.skipped).toEqual([
+      'read: the condition reads the incoming write, which read does not send',
+      'delete: the condition reads the incoming write, which delete does not send',
+    ])
+  })
+  it('also when the incoming write is read inside a lookup path', () => {
+    const viaLookup = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'firestore', path: '/dogs/{dogId}' },
+      ops: ['delete'],
+      requires: { atom: { op: 'eq', left: 'doc(/orgs/{incoming.orgId}).open', right: { literal: true } } },
+    }), vocab)!
+    expect(viaLookup.cases).toEqual([])
+    expect(viaLookup.skipped).toEqual(['delete: the condition reads the incoming write, which delete does not send'])
+  })
+})
