@@ -141,8 +141,11 @@ Ids use names, never line numbers, so they survive refactors. Locations are evid
 
 Rules:
 
-- Every id that a rule's `evidence`, `via` or `symbol` target, a `calls` edge, a guard's `at` or a dataOp's `in` mentions
-  must be emitted as a symbol (or route, table, policy). `FactIndex.hasId` knows symbols, routes, tables and policies.
+- Every id that a rule's `evidence` or `symbol` target names **must** be emitted as a symbol (or route, table,
+  policy): `FactIndex.hasId` knows symbols, routes, tables and policies, a missing `symbol` target makes the rule
+  `stale`, and missing evidence rejects a proposal (and, while errors exist, makes the rule `unknown`).
+- Ids named by `via` entries, `calls` edge endpoints, a guard's `at` or a dataOp's `in` **should** be emitted as
+  symbols, so results can point at a location. Nothing fails without them: `via` matches by id and `<via>.` prefix.
 - `location.line` is the declaration line of the symbol (the `CREATE TABLE` line for a table).
 - A route with no location of its own reports its handler's location.
 
@@ -226,6 +229,12 @@ Only atoms that are false for an anonymous caller imply `authenticated`:
 | `in` between an actor operand and a **non-empty array** literal | yes |
 | `eq` to a boolean or null literal, `ne`, `lt`, `gt`, `isNull`, anything else | no |
 
+**Anonymous caller convention.** An anonymous caller is `actor = null` (`as: null` in test cases). Every atom with
+an actor operand (`actor.uid`, `actor.role`, `actor.claim.*`, or an `exists` doc with an `{actor.` placeholder) is
+false for it, including `ne` and `isNull` on an actor operand. The prover is sound against this model; the
+model-based property test in `packages/core/test/logic.test.ts` checks it. The table above is deliberately narrower
+than the model allows (it does not count `ne` or `isNull` on an actor operand), which only makes it more conservative.
+
 Store semantics that deny anonymous callers are NOT inferred. Analyzers for Firestore rules and Postgres RLS
 (where `auth.uid()` is null for anonymous callers) must emit an explicit `{ atom: { op: 'authenticated' } }` in the
 conditions of every policy that requires a signed-in caller. Without it, a rule requiring `authenticated` reports a violation.
@@ -272,7 +281,10 @@ not `METHOD /path` or `route:<id>` throws.
 `calls` holds `[caller, callee]` symbol ids. `FactIndex.coveredBy(symbol, via)` answers "does every call path into
 `symbol` pass through a `via` symbol":
 
-- A `via` entry covers itself and its members: `ts:x#Repo` covers `ts:x#Repo.update` (prefix `<via>.`).
+- A `via` entry covers itself and its members: `ts:x#Repo` covers `ts:x#Repo.update`. Matching is purely by id:
+  equal, or starting with the `<via>.` prefix. Where a member boundary falls in each language's ids (a method, a
+  nested function, a Go package path segment) is decided by each analyzer track, which must emit member ids as
+  `<owner>.<member>` for `via` to cover them.
 - Walks callers upward; a via caller stops that branch. A node with no callers (an entry point, such as a route
   handler) that has not passed a via node makes the answer false.
 - A pure cycle that contains no via node is uncovered (false). A cycle that contains one is covered.
@@ -314,9 +326,19 @@ type AnalyzerOutput = Omit<FactsInput, 'version' | 'analyzers'>
 | Item | Detail |
 |---|---|
 | `files` | Repo-relative paths from `listFiles(root)`: `git ls-files --cached --others --exclude-standard` minus deleted files, minus any path with a segment in `node_modules .git .holdline dist build .venv vendor .next .svelte-kit`. Without git, a directory walk with the same skips. Sorted |
-| `cache` | `FileCache` keyed by `(analyzer name, analyzer version, file content)` under `.holdline/cache/files/`. Bump `version` when output changes |
+| `cache` | `FileCache`, see below. Bump `version` when output changes |
 | Output | An object of the list fields only. `scan` adds `version: 1` and `analyzers: [{ name, version }]` and validates with `parseFacts` |
 | Core imports no language tooling | Go and Python helpers run as child processes and print facts JSON on stdout |
+
+### FileCache (`cache.ts`)
+
+| Member | Behavior |
+|---|---|
+| `get<T>(analyzer, version, content)` | `Promise<T \| undefined>`: the cached value, or `undefined` when there is none or it cannot be read |
+| `set(analyzer, version, content, value)` | `Promise<void>`: writes `value` as JSON |
+| Path | `.holdline/cache/files/<analyzer>/<sha256(version + "\0" + content)>.json` under the repo root |
+
+The key is the file content, not its path, so a renamed file with the same content hits the cache.
 
 `scan(root, analyzers)` returns `{ facts, ran }` and never throws for analyzer problems. Each failure becomes a facts
 part with one diagnostic `{ analyzer, file: '', severity: 'error', message }`:
