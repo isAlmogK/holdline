@@ -125,6 +125,7 @@ export function validateRuleSemantics(rule: Rule | ProposedRule): string[] {
   const problems: string[] = []
   if (rule.kind === 'fk' && !rule.references) problems.push('fk needs references')
   if (rule.kind === 'enum' && !rule.values) problems.push('enum needs values')
+  if (rule.kind === 'check' && !rule.expr) problems.push('check needs expr')
   if (rule.kind === 'fk' && rule.target.store !== 'postgres') problems.push('fk applies to postgres tables only')
   if (rule.kind === 'unique' && rule.target.store !== 'postgres') problems.push('unique applies to postgres tables only')
   if (rule.kind === 'check' && rule.target.store !== 'postgres') problems.push('check applies to postgres tables only')

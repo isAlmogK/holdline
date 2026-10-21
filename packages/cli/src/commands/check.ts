@@ -10,6 +10,8 @@ export type CheckOptions = { facts?: string; format: string; strict?: boolean; r
 export async function checkCommand(opts: CheckOptions, io: Io): Promise<number> {
   if (!['human', 'agent', 'json'].includes(opts.format)) throw new UsageError(`unknown format ${opts.format}: use human, agent or json`)
   const file = await loadRules(io.cwd)
+  const missing = (opts.rule ?? []).filter(id => !file.rules.some(r => r.id === id))
+  if (missing.length > 0) throw new UsageError(`no rule ${missing.join(', ')}`)
   const facts = await loadFacts(io.cwd, opts.facts)
   const { results, muted, mutedRules } = runChecks(facts, file, { only: opts.rule })
   const summary = summarize(results, muted)
