@@ -186,7 +186,9 @@ A string matching `OPERAND_PATTERN`, or `{ literal }`.
 | `{ literal: string \| number \| boolean \| null \| (string \| number)[] }` | Constant |
 
 `in` takes an **array literal** on the right (`{ literal: ['admin', 'trainer'] }`). Any other right side is never
-treated as a set.
+treated as a set by the prover: it matches an `in` atom whose right side is not a literal (such as a lookup,
+`x in doc(/users/{actor.uid}).accountIds`) only against an identical atom. The test generator treats a lookup on the
+right of `in` as a one-element array that it seeds (see rules-file.md "Generation").
 
 ### `exists` doc formats
 
