@@ -1,4 +1,5 @@
-import { mentionsOperand, renameParams } from '../logic.js'
+import type { Expr } from '../expr.js'
+import { implies, renameParams } from '../logic.js'
 import { alignParams, normalizeTable } from '../paths.js'
 import type { InvariantRule, ProposedRule } from '../rules.js'
 import type { CheckContext, CheckOutcome, Violation } from './types.js'
@@ -7,7 +8,21 @@ type Invariant = Extract<InvariantRule | ProposedRule, { type: 'invariant' }>
 
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i])
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every(x => b.includes(x))
-const normalizeSql = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim().replace(/^\((.*)\)$/, '$1').trim()
+const normalizeSql = (s: string): string => {
+  let out = s.toLowerCase().replace(/\s+/g, ' ').trim()
+  while (/^\(.*\)$/.test(out) && wrapped(out)) out = out.slice(1, -1).trim()
+  return out
+}
+// True when the first "(" closes at the very end, so stripping it is safe.
+function wrapped(s: string): boolean {
+  let depth = 0
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '(') depth++
+    else if (s[i] === ')' && --depth === 0) return i === s.length - 1
+  }
+  return false
+}
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 export function checkInvariant(rule: Invariant, ctx: CheckContext): CheckOutcome {
   return rule.target.store === 'postgres' ? checkTable(rule, rule.target.table, ctx) : checkDocs(rule, ctx)
@@ -42,7 +57,7 @@ function checkTable(rule: Invariant, tableName: string, { index }: CheckContext)
     case 'check': {
       const found = table.checks.some(c => rule.expr
         ? normalizeSql(c.expr) === normalizeSql(rule.expr)
-        : rule.columns.every(col => new RegExp(`\\b${col}\\b`).test(c.expr)))
+        : rule.columns.every(col => new RegExp(`\\b${escapeRe(col)}\\b`).test(c.expr)))
       return found ? { violations: [] }
         : fail(`${table.name} has no CHECK ${rule.expr ? `(${rule.expr})` : `on ${cols}`}`, `ALTER TABLE ${table.name} ADD CHECK (${rule.expr ?? '…'});`)
     }
@@ -58,18 +73,25 @@ function checkTable(rule: Invariant, tableName: string, { index }: CheckContext)
   }
 }
 
-function checkDocs(rule: Invariant, { index }: CheckContext): CheckOutcome {
+function checkDocs(rule: Invariant, { index, vocab }: CheckContext): CheckOutcome {
   const t = rule.target
   if (t.store === 'postgres') return { violations: [] }
   if (!index.targetExists(t)) return { stale: `nothing matches ${t.store}:${t.path}` }
+  if (rule.kind !== 'not-null' && rule.kind !== 'enum') {
+    return { violations: [{ message: `${rule.kind} is not supported for ${t.store} targets`, fix: `Enforce ${rule.kind} in application code or move the data to postgres.` }] }
+  }
   const writes = [...index.policies(t, 'create'), ...index.policies(t, 'update')]
+  const required = (c: string): Expr => rule.kind === 'enum'
+    ? { atom: { op: 'in', left: `incoming.${c}`, right: { literal: rule.values! } } }
+    : { atom: { op: 'ne', left: `incoming.${c}`, right: { literal: null } } }
   const violations: Violation[] = writes.flatMap(p => {
     const condition = renameParams(p.condition, alignParams(p.target, t.path))
-    const unchecked = rule.columns.filter(c => !mentionsOperand(condition, `incoming.${c}`))
+    const unchecked = rule.columns.filter(c => !implies(condition, required(c), vocab).ok)
+    const what = rule.kind === 'enum' ? `restrict ${unchecked.join(', ')} to ${rule.values!.join(', ')}` : `require ${unchecked.join(', ')} to be non-null`
     return unchecked.length === 0 ? [] : [{
-      message: `A write rule for ${t.store}:${t.path} does not check ${unchecked.join(', ')}`,
+      message: `A write rule for ${t.store}:${t.path} does not ${what}`,
       at: index.at(p.id),
-      fix: `Check request.resource.data.${unchecked.join(', request.resource.data.')} in this rule.`,
+      fix: `Make this rule ${what} on request.resource.data.`,
     }]
   })
   return { violations: dedupe(violations) }

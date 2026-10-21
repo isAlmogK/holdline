@@ -58,6 +58,22 @@ describe('parseRulesFile', () => {
   })
 })
 
+describe('firestore invariants', () => {
+  it.each(['unique', 'check'])('rejects a %s invariant on a firestore target', kind => {
+    const text = `version: 1
+rules:
+  - id: R-001
+    text: t
+    type: invariant
+    status: pending
+    target: { store: firestore, path: "/dogs/{dogId}" }
+    kind: ${kind}
+    columns: [name]
+`
+    expect(() => parseRulesFile(text)).toThrow(new RegExp(`R-001: ${kind} applies to postgres tables only`))
+  })
+})
+
 describe('serializeRulesFile', () => {
   it('round-trips', () => {
     const f = parseRulesFile(yamlText)

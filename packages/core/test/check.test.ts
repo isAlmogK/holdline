@@ -138,6 +138,29 @@ describe('invariant', () => {
     ]
     expect(run({ tables: [broken] }, file(rules)).map(r => r.status)).toEqual(['violation', 'violation', 'violation', 'violation', 'violation'])
   })
+  it('ignores repeated outer parentheses in check expressions', () => {
+    const r = run({ tables: [{ ...table, checks: [{ expr: '((weight > 0))' }] }] }, file([inv({ kind: 'check', columns: ['weight'], expr: 'weight > 0' })]))
+    expect(r[0]!.status).toBe('pass')
+  })
+  it('firestore not-null requires the write to prove the field is non-null', () => {
+    const fsTarget = { store: 'firestore', path: '/dogs/{dogId}' }
+    const rule = inv({ kind: 'not-null', columns: ['team_id'], target: fsTarget })
+    const ne = { atom: { op: 'ne', left: 'incoming.team_id', right: { literal: null } } }
+    const policy = (condition: unknown) => ({ id: 'p', store: 'firestore', target: '/dogs/{d}', ops: ['create'], condition })
+    const status = (condition: unknown) => run({ policies: [policy(condition)] }, file([rule]))[0]!.status
+    expect(status({ atom: { op: 'isNull', operand: 'incoming.team_id' } })).toBe('violation')
+    expect(status({ or: [auth, ne] })).toBe('violation')
+    expect(status({ not: ne })).toBe('violation')
+    expect(status(ne)).toBe('pass')
+  })
+  it('firestore enum requires the write to restrict the field to the values', () => {
+    const fsTarget = { store: 'firestore', path: '/dogs/{dogId}' }
+    const rule = inv({ kind: 'enum', columns: ['c'], values: ['x'], target: fsTarget })
+    const inn = (v: string[]) => ({ atom: { op: 'in', left: 'incoming.c', right: { literal: v } } })
+    const status = (condition: unknown) => run({ policies: [{ id: 'p', store: 'firestore', target: '/dogs/{d}', ops: ['update'], condition }] }, file([rule]))[0]!.status
+    expect(status(inn(['x', 'y']))).toBe('violation')
+    expect(status(inn(['x']))).toBe('pass')
+  })
   it('firestore invariants require write policies to check the field', () => {
     const fsTarget = { store: 'firestore', path: '/dogs/{dogId}' }
     const ok = { id: 'p', store: 'firestore', target: '/dogs/{d}', ops: ['create', 'update'], condition: { atom: { op: 'ne', left: 'incoming.team_id', right: { literal: null } } } }
@@ -170,5 +193,27 @@ describe('runChecks bookkeeping', () => {
       symbols: [{ id: 'h', kind: 'function', lang: 'ts', location: { file: 'src/a.ts', line: 1 } }],
       diagnostics: [{ analyzer: 'ts', file: 'src/a.ts', message: 'parse error', severity: 'error' }] }), f)
     expect(out.results[0]!.status).toBe('unknown')
+  })
+})
+
+describe('unreadable dependencies', () => {
+  const rule = { id: 'R-001', text: 'Members read dogs', type: 'data-access', target: { store: 'firestore', path: '/dogs/{dogId}' }, ops: ['read'], requires: auth }
+  const policy = { id: 'p1', store: 'firestore', target: '/dogs/{d}', ops: ['read'], condition: auth, evidence: { file: 'firestore.rules', line: 2 } }
+  const err = (file: string) => ({ analyzer: 'a', file, message: 'parse error', severity: 'error' })
+  it('is unknown when a policy file has an error diagnostic', () => {
+    expect(run({ policies: [policy], diagnostics: [err('firestore.rules')] }, file([rule]))[0]!.status).toBe('unknown')
+  })
+  it('is unknown when the rules file failed to parse and emitted no policies', () => {
+    const facts = { dataOps: [{ in: 'client:read', store: 'firestore', target: '/dogs/{id}', op: 'read' }], diagnostics: [err('firestore.rules')] }
+    expect(run(facts, file([rule]))[0]!.status).toBe('unknown')
+  })
+  it('is unknown when an analyzer crashed (empty file)', () => {
+    expect(run({ policies: [policy], diagnostics: [err('')] }, file([rule]))[0]!.status).toBe('unknown')
+  })
+  it('stays pass for an error in an unrelated file', () => {
+    const routes = [{ id: 'route:GET /a', method: 'GET', path: '/a', handler: 'h', framework: 'x' }]
+    const access = { id: 'R-001', text: 't', type: 'access', target: { routes: 'GET /a' }, requires: auth }
+    const facts = { routes, guards: [{ at: 'h', requires: auth }], symbols: [{ id: 'h', kind: 'function', lang: 'ts', location: { file: 'src/a.ts', line: 1 } }], diagnostics: [err('src/other.ts')] }
+    expect(run(facts, file([access]))[0]!.status).toBe('pass')
   })
 })

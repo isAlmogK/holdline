@@ -8,6 +8,7 @@ import { checkDataAccess } from './data-access.js'
 import { checkFlow } from './flow.js'
 import { checkInvariant } from './invariant.js'
 import type { CheckContext, CheckOutcome } from './types.js'
+import { unreadableReason } from './unreadable.js'
 import { checkVisibility } from './visibility.js'
 
 export function evaluateRule(rule: Rule | ProposedRule, ctx: CheckContext): CheckOutcome {
@@ -25,14 +26,12 @@ export function checkRule(rule: Rule, ctx: CheckContext): Result[] {
   if (!rule.approved || rule.approved.hash !== hashRule(rule, ctx.vocab)) {
     return [{ rule: rule.id, status: 'unapproved-edit', target, message: `"${rule.text}" was changed without approval. Approve it with \`holdline approve ${rule.id}\`, or restore it.` }]
   }
+  const reason = unreadableReason(rule, ctx)
+  if (reason) return [{ rule: rule.id, status: 'unknown', target, message: reason }]
   const outcome = evaluateRule(rule, ctx)
-  const unreadable = rule.evidence.some(id => {
-    const file = ctx.index.fileOf(id)
-    return !!file && ctx.index.errorFiles().has(file)
-  })
-  if ('stale' in outcome) return [{ rule: rule.id, status: unreadable ? 'unknown' : 'stale', target, message: outcome.stale }]
+  if ('stale' in outcome) return [{ rule: rule.id, status: 'stale', target, message: outcome.stale }]
   if (outcome.violations.length === 0) return [{ rule: rule.id, status: 'pass', target, message: rule.text }]
-  return outcome.violations.map(v => ({ rule: rule.id, status: unreadable ? 'unknown' : 'violation', target, ...v }))
+  return outcome.violations.map(v => ({ rule: rule.id, status: 'violation' as const, target, ...v }))
 }
 
 export function runChecks(facts: Facts, file: RulesFile, opts: { only?: string[] } = {}): { results: Result[]; muted: number } {
