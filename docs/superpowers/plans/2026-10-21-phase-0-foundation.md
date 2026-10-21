@@ -22,7 +22,7 @@
 - Exit codes: 0 no violations, 1 violation or unapproved edit (with `--strict` also stale or unknown), 2 usage or config error, 3 analyzer or internal error (§9.2).
 - Files: one responsibility each; prefer files under 200 lines.
 - Never commit DogBase code, rules or facts to this repo (§11).
-- Commits use conventional commit messages and end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Work happens on a feature branch, never on `main`.
+- Commits use conventional commit messages and end with the `Co-Authored-By:` trailer naming the model that wrote the commit (the committing agent's own attribution instructions). Work happens on a feature branch, never on `main`.
 
 ## File Structure
 
