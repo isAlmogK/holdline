@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { canonicalJson, deepEqual } from '../src/canonical.js'
-import { ExprSchema, OperandSchema } from '../src/expr.js'
+import { ExprSchema, OperandSchema, isLookupOperand, parseLookup } from '../src/expr.js'
 import { formatExpr } from '../src/format.js'
 
 describe('canonicalJson', () => {
@@ -59,5 +59,24 @@ describe('formatExpr', () => {
     expect(formatExpr({ opaque: 'customCheck()' })).toBe('<customCheck()>')
     expect(formatExpr({ atom: { op: 'exists', doc: '/accounts/{param.a}/members/{actor.uid}' } }))
       .toBe('exists(/accounts/{param.a}/members/{actor.uid})')
+  })
+})
+
+describe('lookup operands', () => {
+  it('accepts doc(<path>).<field>', () => {
+    for (const o of ['doc(/users/{actor.uid}).accountIds', 'doc(/accounts/{param.accountId}/members/{actor.uid}).role', 'doc(/accounts/{resource.accountId}).plan.tier']) {
+      expect(OperandSchema.safeParse(o).success).toBe(true)
+    }
+  })
+  it('rejects malformed lookups', () => {
+    for (const o of ['doc(users/x).f', 'doc(/a).', 'doc(/a/(b)).f', 'doc(/a)', 'doc(/a/{actor.uid).f', 'doc(/a/{nope}).f', 'doc(/a/{resource.x.y}).f', 'doc(/a/{}/b).f', 'doc(/a/uid}).f']) {
+      expect(OperandSchema.safeParse(o).success).toBe(false)
+    }
+  })
+  it('parses path and field', () => {
+    expect(parseLookup('doc(/users/{actor.uid}).accountIds')).toEqual({ path: '/users/{actor.uid}', field: 'accountIds' })
+    expect(parseLookup('resource.x')).toBeUndefined()
+    expect(isLookupOperand('doc(/a/{param.b}).c')).toBe(true)
+    expect(isLookupOperand({ literal: 'doc(/a).b' })).toBe(false)
   })
 })

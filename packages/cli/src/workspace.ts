@@ -2,8 +2,9 @@ import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import {
-  emptyPending, emptyRulesFile, factsCachePath, parseFacts, parsePendingFile, parseRulesFile, scan,
-  serializePendingFile, serializeRulesFile, type Facts, type PendingFile, type RulesFile,
+  approvedRecognizers, emptyPending, emptyRulesFile, factsCachePath, parseFacts, parsePendingFile, parseRulesFile,
+  RulesFileError, scan, serializePendingFile, serializeRulesFile, type AnalyzerRecognizer, type Facts, type PendingFile,
+  type RulesFile,
 } from '@holdline/core'
 import { analyzers } from './analyzers.js'
 import { UsageError, type Io } from './io.js'
@@ -53,9 +54,26 @@ export async function loadFacts(root: string, factsFile?: string): Promise<Facts
     }
     return parseFacts(json, factsFile)
   }
-  const { facts } = await scan(root, analyzers)
+  const { facts } = await scanProject(root)
   await writeFileEnsured(factsCachePath(root), JSON.stringify(facts, null, 2))
   return facts
+}
+
+// Runs the analyzers with the recognizers of the approved vocabulary in holdline.rules. A missing or
+// invalid rules file gives none: scanning does not depend on it (check reports a bad file itself).
+export async function scanProject(root: string): ReturnType<typeof scan> {
+  return scan(root, analyzers, { recognizers: await recognizers(root) })
+}
+
+async function recognizers(root: string): Promise<AnalyzerRecognizer[]> {
+  const text = await readIfExists(rulesPath(root))
+  if (text === undefined) return []
+  try {
+    return approvedRecognizers(parseRulesFile(text))
+  } catch (e) {
+    if (e instanceof RulesFileError) return []
+    throw e
+  }
 }
 
 export function approver(io: Io): string {

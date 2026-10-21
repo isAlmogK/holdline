@@ -1,7 +1,7 @@
 # Fact graph reference
 
 The fact graph is what every analyzer emits and every checker reads. This page describes the code as built.
-Sources: `packages/core/src/facts.ts`, `expr.ts`, `paths.ts`, `logic.ts`, `fact-index.ts`, `analyzer.ts`, `scan.ts`.
+Sources: `packages/core/src/facts.ts`, `expr.ts`, `paths.ts`, `logic.ts`, `fact-index.ts`, `analyzer.ts`, `config.ts`, `files.ts`, `scan.ts`.
 Worked example: `examples/golden-ts-postgres/fixtures/facts.json`.
 
 All schemas are zod `strictObject`s: an unknown key is an error. `parseFacts(json, source)` throws `FactsError`
@@ -182,10 +182,13 @@ A string matching `OPERAND_PATTERN`, or `{ literal }`.
 | `resource.<field>` | The stored record |
 | `incoming.<field>` | The data being written |
 | `param.<name>` | A route or path parameter (no dots) |
+| `doc(<path>).<field>` | A field of another document (lookup). `<path>` starts with `/`, has no parentheses and may hold `{<operand>}` placeholders, valid operands only and `resource.*`/`incoming.*` one field deep (`doc(/users/{actor.uid}).accountIds`); other braces are rejected; `<field>` is one or more `[A-Za-z0-9_]+` segments joined by dots. The Firestore analyzer maps `get(P).data.f` to it. Two lookups are equal only when their strings are equal |
 | `{ literal: string \| number \| boolean \| null \| (string \| number)[] }` | Constant |
 
 `in` takes an **array literal** on the right (`{ literal: ['admin', 'trainer'] }`). Any other right side is never
-treated as a set.
+treated as a set by the prover: it matches an `in` atom whose right side is not a literal (such as a lookup,
+`x in doc(/users/{actor.uid}).accountIds`) only against an identical atom. The test generator treats a lookup on the
+right of `in` as a one-element array that it seeds (see rules-file.md "Generation").
 
 ### `exists` doc formats
 
@@ -219,18 +222,19 @@ try each part of C's `and`; try each part of R's `or`; compare two atoms; compar
 
 ### What implies `authenticated`
 
-Only atoms that are false for an anonymous caller imply `authenticated`:
+Only atoms that are false for an anonymous caller imply `authenticated`. An operand is **actor-dependent** when it is an `actor.*` operand or a lookup whose path contains `{actor.`:
 
 | Atom | Implies `authenticated` |
 |---|---|
 | `authenticated` | yes |
 | `exists` whose `doc` contains an actor placeholder (`{actor.`) | yes |
-| `eq` between an actor operand and a non-null **string or number** literal | yes |
-| `in` between an actor operand and a **non-empty array** literal | yes |
+| `eq` between an actor-dependent operand and a non-null **string or number** literal | yes |
+| `in` between an actor-dependent operand and a **non-empty array** literal | yes |
+| `eq`/`in` where the non-actor side is not such a literal (for example `x in doc(/users/{actor.uid}).accountIds`, or a lookup without `{actor.` in its path) | no |
 | `eq` to a boolean or null literal, `ne`, `lt`, `gt`, `isNull`, anything else | no |
 
 **Anonymous caller convention.** An anonymous caller is `actor = null` (`as: null` in test cases). Every atom with
-an actor operand (`actor.uid`, `actor.role`, `actor.claim.*`, or an `exists` doc with an `{actor.` placeholder) is
+an actor operand (`actor.uid`, `actor.role`, `actor.claim.*`, an `exists` doc with an `{actor.` placeholder, or an `eq`/`in` lookup whose path has an `{actor.` placeholder) is
 false for it, including `ne` and `isNull` on an actor operand. The prover is sound against this model; the
 model-based property test in `packages/core/test/logic.test.ts` checks it. The table above is deliberately narrower
 than the model allows (it does not count `ne` or `isNull` on an actor operand), which only makes it more conservative.
@@ -316,10 +320,13 @@ and a file that failed to parse removes facts from that set, so the rule could p
 interface Analyzer {
   name: string
   version: string
-  detect(root: string, files: readonly string[]): boolean | Promise<boolean>
+  detect(root: string, files: readonly string[], config: HoldlineConfig): boolean | Promise<boolean>
   analyze(ctx: AnalyzerContext): Promise<AnalyzerOutput>
 }
-interface AnalyzerContext { root: string; files: readonly string[]; cache: FileCache }
+interface AnalyzerContext {
+  root: string; files: readonly string[]; cache: FileCache; config: HoldlineConfig
+  recognizers: { id: string; recognize: VocabularyEntry['recognize'] }[]
+}
 type AnalyzerOutput = Omit<FactsInput, 'version' | 'analyzers'>
 ```
 
@@ -327,8 +334,37 @@ type AnalyzerOutput = Omit<FactsInput, 'version' | 'analyzers'>
 |---|---|
 | `files` | Repo-relative paths from `listFiles(root)`: `git ls-files --cached --others --exclude-standard` minus deleted files, minus any path with a segment in `node_modules .git .holdline dist build .venv vendor .next .svelte-kit`. Without git, a directory walk with the same skips. Sorted |
 | `cache` | `FileCache`, see below. Bump `version` when output changes |
+| `config` | `HoldlineConfig` from `.holdline/config.yaml`, loaded once per scan by `scan` (see "Project config" below) and passed to both `detect` and `analyze`. Each analyzer reads only its own section and applies its own defaults when the section is absent |
+| `recognizers` | The `recognize` lists of the approved vocabulary entries (`approvedRecognizers(file)`: entries whose `approved.hash` equals `hashVocabulary(entry)` and whose `recognize` is not empty), as `{ id, recognize }`. `scan(root, analyzers, { recognizers })` passes them (default `[]`); the CLI reads them from `holdline.rules` when it scans (`holdline scan` and every command that scans), and passes none when the file is missing or invalid. An analyzer that uses them must include them in its cache key, for example by hashing the recognizers JSON together with the file content, since the same file gives different facts under different recognizers |
 | Output | An object of the list fields only. `scan` adds `version: 1` and `analyzers: [{ name, version }]` and validates with `parseFacts` |
 | Core imports no language tooling | Go and Python helpers run as child processes and print facts JSON on stdout |
+
+### Project config (`.holdline/config.yaml`)
+
+Optional. `loadConfig(root)` in `config.ts` reads `<root>/.holdline/config.yaml`; a missing file means `{}`. Sections:
+
+| Section | Keys | Notes |
+|---|---|---|
+| `postgres` | `migrations` (glob list), `dialect` (`supabase` or `plain`) | |
+| `firestore` | `rules` (glob list) | |
+| `storage` | `rules` (glob list) | |
+
+A glob list is a non-empty array of non-empty strings. A glob is a root-relative POSIX pattern: an absolute glob (leading `/` or `\`, or a drive letter) or one with a `..` segment is a `ConfigError`. A section with no body (`postgres:` alone, YAML null) is an empty section (`{}`). Unknown keys inside a known section are an error. Unknown top-level
+sections are kept (so a later analyzer can read its own section). Bad YAML or bad values throw `ConfigError`, whose
+message names `.holdline/config.yaml`; `holdline` exits 2 on it. `scan` loads the config before it runs any analyzer and
+does not catch a `ConfigError`: it is a config error, not an analyzer failure, so it never becomes a diagnostic.
+
+### Matching globs (`files.ts`)
+
+`matchFiles(files, globs)` returns the files that match any glob, sorted and without duplicates. Analyzers match
+their config globs against `ctx.files` (the git-aware list), never the disk, so ignored and skipped files never match.
+
+| Glob syntax | Matches |
+|---|---|
+| `*` | Any characters within one path segment (`*.sql` matches `schema.sql`, not `db/a.sql`) |
+| `**` as a whole segment | Any number of segments, including zero (`**/firestore.rules` matches `firestore.rules` and `packages/app/firestore.rules`; `db/**/*.sql` matches `db/a.sql` and `db/x/y/b.sql`) |
+| `?` | One character other than `/` |
+| anything else | Itself |
 
 ### FileCache (`cache.ts`)
 
@@ -340,7 +376,8 @@ type AnalyzerOutput = Omit<FactsInput, 'version' | 'analyzers'>
 
 The key is the file content, not its path, so a renamed file with the same content hits the cache.
 
-`scan(root, analyzers)` returns `{ facts, ran }` and never throws for analyzer problems. Each failure becomes a facts
+`scan(root, analyzers, opts?)` returns `{ facts, ran }` and never throws for analyzer problems (it throws `ConfigError` for a bad
+config file, see "Project config"). Each analyzer failure becomes a facts
 part with one diagnostic `{ analyzer, file: '', severity: 'error', message }`:
 
 | Failure | Message prefix |

@@ -1,5 +1,5 @@
 import { deepEqual } from './canonical.js'
-import type { Atom, Expr, Literal, Operand } from './expr.js'
+import { isLookupOperand, type Atom, type Expr, type Literal, type Operand } from './expr.js'
 
 export type Vocabulary = ReadonlyMap<string, Expr>
 export type Implication = { ok: true } | { ok: false; unproven: Expr }
@@ -19,6 +19,7 @@ export function expand(expr: Expr, vocab: Vocabulary, seen: ReadonlySet<string> 
 
 const isLiteral = (o: Operand): o is { literal: Literal } => typeof o !== 'string'
 const isActor = (o: Operand) => typeof o === 'string' && o.startsWith('actor.')
+const actorDependent = (o: Operand) => isActor(o) || (isLookupOperand(o) && o.includes('{actor.'))
 
 function normalizeAtom(a: Atom): Atom {
   if ((a.op === 'eq' || a.op === 'ne') && isLiteral(a.left) && !isLiteral(a.right)) {
@@ -35,7 +36,7 @@ function impliesAuthenticated(a: Atom): boolean {
     case 'exists': return a.doc.includes('{actor.')
     case 'eq':
     case 'in': {
-      const [actorSide, other] = isActor(a.left) ? [a.left, a.right] : isActor(a.right) ? [a.right, a.left] : [undefined, undefined]
+      const [actorSide, other] = actorDependent(a.left) ? [a.left, a.right] : actorDependent(a.right) ? [a.right, a.left] : [undefined, undefined]
       if (actorSide === undefined || other === undefined || !isLiteral(other)) return false
       const v = other.literal
       if (a.op === 'in') return Array.isArray(v) && v.length > 0
@@ -119,7 +120,7 @@ function atoms(expr: Expr): Atom[] {
   return []
 }
 
-// Renames `param.<name>` operands and `{param.<name>}` doc placeholders through `names`.
+// Renames `param.<name>` operands and `{param.<name>}` placeholders (in exists docs and lookup operands) through `names`.
 // With `fresh`, a param that `names` does not map gets a fresh name (`__p0`, `__p1`, ... in order of first
 // appearance) instead of keeping its own, so it cannot collide with a param of the other side.
 export function renameParams(expr: Expr, names: ReadonlyMap<string, string>, opts: { fresh?: boolean } = {}): Expr {
@@ -132,10 +133,10 @@ export function renameParams(expr: Expr, names: ReadonlyMap<string, string>, opt
     if (!fresh.has(n)) fresh.set(n, `__p${fresh.size}`)
     return fresh.get(n)!
   }
-  const op = (o: Operand): Operand =>
-    typeof o === 'string' && o.startsWith('param.') ? `param.${rename(o.slice(6))}` : o
   const doc = (d: string) =>
     d.replace(/\{param\.([A-Za-z0-9_]+)\}/g, (_, n: string) => `{param.${rename(n)}}`)
+  const op = (o: Operand): Operand =>
+    typeof o !== 'string' ? o : o.startsWith('param.') ? `param.${rename(o.slice(6))}` : isLookupOperand(o) ? doc(o) : o
   return mapAtoms(expr, a => {
     switch (a.op) {
       case 'authenticated': return a
@@ -154,13 +155,16 @@ export function collectRefs(expr: Expr): string[] {
   return []
 }
 
+// True when the operand appears as an operand, or as a `{operand}` placeholder in an `exists` doc or a lookup path.
 export function mentionsOperand(expr: Expr, operand: string): boolean {
+  const placeholder = `{${operand}}`
+  const mentions = (o: Operand) => o === operand || (isLookupOperand(o) && o.includes(placeholder))
   return atoms(expr).some(a => {
     switch (a.op) {
       case 'authenticated': return false
-      case 'exists': return a.doc.includes(`{${operand}}`)
-      case 'isNull': return a.operand === operand
-      default: return a.left === operand || a.right === operand
+      case 'exists': return a.doc.includes(placeholder)
+      case 'isNull': return mentions(a.operand)
+      default: return mentions(a.left) || mentions(a.right)
     }
   })
 }

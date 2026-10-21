@@ -95,6 +95,12 @@ describe('holdline check', () => {
     const badFacts = await makeProject({ 'holdline.rules': rulesFile(auth), 'facts.json': '{"version":9}' })
     expect((await runCli(['check', '--facts', 'facts.json'], { cwd: badFacts })).code).toBe(2)
   })
+  it('exits 2 on a malformed .holdline/config.yaml', async () => {
+    const root = await makeProject({ 'holdline.rules': rulesFile(auth), '.holdline/config.yaml': 'postgres:\n  dialect: oracle\n' })
+    const out = await runCli(['check'], { cwd: root })
+    expect(out.code).toBe(2)
+    expect(out.stderr).toContain('config.yaml')
+  })
   it('exits 2 when --rule names a rule that is not in holdline.rules', async () => {
     const root = await makeProject({ 'holdline.rules': rulesFile(auth), 'facts.json': facts })
     const out = await runCli(['check', '--facts', 'facts.json', '--rule', 'R-404'], { cwd: root })

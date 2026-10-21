@@ -3,7 +3,9 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { Analyzer } from '../src/analyzer.js'
+import { approvedRecognizers, type Analyzer } from '../src/analyzer.js'
+import { hashVocabulary } from '../src/hash.js'
+import type { RulesFile, VocabularyEntry } from '../src/rules.js'
 import { FileCache } from '../src/cache.js'
 import { listFiles, scan } from '../src/scan.js'
 
@@ -82,6 +84,36 @@ describe('scan', () => {
     const bad: Analyzer = { name: 'bad', version: '1', detect: () => true, analyze: async () => ({ routes: [{ nope: 1 }] }) as never }
     const out = await scan(root, [bad])
     expect(out.facts.diagnostics[0]!.message).toMatch(/invalid facts/)
+  })
+})
+
+describe('recognizers', () => {
+  it('scan gives analyzers the recognizers it was passed, and none by default', async () => {
+    const root = await fixture()
+    const seen: unknown[] = []
+    const spy: Analyzer = { name: 'spy', version: '1', detect: () => true, analyze: async ctx => { seen.push(ctx.recognizers); return {} } }
+    const recognizers = [{ id: 'staff', recognize: [{ 'firestore-function': 'isStaff' }] }]
+    await scan(root, [spy], { recognizers })
+    await scan(root, [spy])
+    expect(seen).toEqual([recognizers, []])
+  })
+  it('approvedRecognizers keeps only approved entries that have recognizers', () => {
+    const entry = (id: string, recognize: VocabularyEntry['recognize']): VocabularyEntry =>
+      ({ id, text: id, expr: { atom: { op: 'authenticated' } }, recognize })
+    const stamp = (v: VocabularyEntry, hash = hashVocabulary(v)): VocabularyEntry => ({ ...v, approved: { by: 'a', at: '2026-10-21', hash } })
+    const file: RulesFile = {
+      version: 1,
+      rules: [],
+      vocabulary: [
+        stamp(entry('staff', [{ 'firestore-function': 'isStaff' }, { symbol: 'ts:src/auth#isStaff' }])),
+        stamp(entry('edited', [{ 'firestore-function': 'isEdited' }]), 'stale-hash'),
+        entry('unapproved', [{ 'firestore-function': 'isNew' }]),
+        stamp(entry('plain', [])),
+      ],
+    }
+    expect(approvedRecognizers(file)).toEqual([
+      { id: 'staff', recognize: [{ 'firestore-function': 'isStaff' }, { symbol: 'ts:src/auth#isStaff' }] },
+    ])
   })
 })
 

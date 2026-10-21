@@ -242,7 +242,8 @@ A vocabulary entry names a condition once so rules can say `{ ref: <id> }`.
 | `approved` | `{ by, at, hash }`, optional | Written by `approve`; never by hand. Not allowed in proposals or `.holdline/pending.yaml` |
 
 `recognize` tells an analyzer which function or symbol means this predicate, so it emits `{ ref: <id> }` instead
-of `opaque`. Core only stores and validates the field; the analyzers act on it.
+of `opaque`. Core stores and validates the field and hands the approved entries' recognizers to the analyzers
+(`AnalyzerContext.recognizers`, see facts.md); the analyzers act on it.
 
 Expansion: `expand` replaces each `ref` with the entry's `expr`, recursively. An unknown id becomes
 `opaque "unknown predicate ..."`, and a cycle becomes `opaque "circular predicate ..."`; an `opaque` never
@@ -378,7 +379,7 @@ skipped: []                              # why cases were not generated
 |---|---|
 | `rule`, `generatedFrom`, `store` | `store` is `postgres`, `firestore` or `storage` |
 | `cases[].as` | `{ uid, role?, claims }` or `null` for an anonymous caller |
-| `cases[].seed` | Records to exist first: `{ path, data }`. Postgres paths are `schema.table` and `data` is the row |
+| `cases[].seed` | Records to exist first: `{ path, store?, data }`. Postgres paths are `schema.table` and `data` is the row. `store` (`postgres`, `firestore` or `storage`) is set only in `storage` files: `storage` on the object under test, `firestore` on every other seed (the `exists` and lookup documents Storage rules read through `firestore.get`/`firestore.exists`). Firestore and Postgres files leave it unset |
 | `cases[].do` | `{ op, path, data? }`. `data` is present for `create` and `update` |
 | `cases[].expect` | `allow`, `deny`, or `reject`. `reject` means a write the database must refuse (for `invariant` cases, such as inserting a null into a `not-null` column). `generateTests` does not produce `reject` cases yet; that lands in Phase 1 |
 | `skipped` | Human readable reasons |
@@ -404,12 +405,15 @@ How each atom is satisfied and then broken:
 | Atom | Satisfy | Break |
 |---|---|---|
 | `authenticated` | Default actor | `as: null` |
-| `isNull x` | Sets `x` to null | Sets `x` to `'not-null'` |
-| `in x [..]` | Sets `x` to the first value | Sets `x` to `'not-allowed'` |
-| `eq a b` | Copies the fixed side (`actor.uid`, `param.*`, literal) to the other, or invents `value-n` for both | Sets the `resource.*` or `incoming.*` side to `'other-value'`; else a claim or role side; else changes the actor uid to `user-2` |
-| `exists doc` | Adds the document to the seed, filling placeholders from the world. Postgres `pg:<table>?<col>={<operand>}...` becomes a row | Leaves the document out |
+| `isNull x` | Sets `x` to null | Pins `x` to `'not-null'` |
+| `in x [..]` | Sets `x` to the first value | Pins `x` to `'not-allowed'` |
+| `in x doc(P).f` | Uses `x` (the fixed value, the value already set, or a new `value-n`), then seeds the document at `P` with `f` = `[value]` | Pins `x` (a `resource.*`, `incoming.*`, claim or role operand) to `'other-value'`, or pins `f` to `['other-value']` |
+| `eq a b` | Copies the fixed side (`actor.uid`, `param.*`, literal) to the other; else copies the side that is already set; else invents `value-n` for both. A `doc(P).f` side seeds field `f` of the document at `P` | Pins the `resource.*` or `incoming.*` side to `'other-value'`; else the looked-up field `f`; else a claim or role side; else changes the actor uid to `user-2` |
+| `exists doc` | Adds the document to the seed, filling placeholders from the world (an unset `resource.*` or `incoming.*` placeholder gets a fresh `value-n`). Postgres `pg:<table>?<col>={<operand>}...` becomes a row | Satisfies the other atoms without it, with the allowed case's `resource.*` and `incoming.*` values pinned, so the case differs only by the missing document or row |
 
-`exists` atoms are satisfied last, so the placeholders they refer to already have values.
+Atoms are satisfied in three stages: plain atoms, then atoms with a lookup operand, then `exists` atoms, so the placeholders they refer to already have values. Generation reads the values earlier conditions already set: an operand that is already set keeps its value (`in`/`eq` read it before inventing one). Within a stage atoms are taken in order, so a few orderings still end in a visible skip (`cannot satisfy ...`, `conflicting conditions ...`), never in a wrong case. A `resource.*` or `incoming.*` field that only a lookup or `exists` path needs (`doc(/accounts/{resource.accountId}/members/{actor.uid}).role`, `exists(/orgs/{resource.orgId}/members/{actor.uid})`) gets a fresh `value-n`. A seeded Firestore document is unique per path: an `exists` doc and lookups on the same path merge into one seed entry with the fields combined (conflicting values are skipped as `conflicting conditions`). A lookup of the target document itself (`doc(/dogs/{param.dogId}).ownerId` on `/dogs/{dogId}`) writes to the record, so it reads the stored record like a `resource.*` operand. An `exists` of the target document (`exists(/dogs/{param.dogId})`) merges into the record seed the same way, so every path appears at most once in a case's `seed`; the record exists for every op but `create`, so that atom is never true on create (create is skipped) and cannot be denied alone on other ops.
+
+A `deny` world is not the allowed world edited: it is solved again around the pin that falsifies the atom (pins on plain operands are applied first, pins on lookup operands with the lookup atoms), so documents and paths keyed on a pinned value follow it. The generator then evaluates every atom in the world and keeps it only if the broken atom is false and every other atom holds. Candidate pins are tried in order, first those no other atom reads or builds a path from. Breaking `authenticated` sets `as: null`, which also makes every atom that reads the actor false; that is not checked.
 
 ### When generation is skipped
 
@@ -423,13 +427,17 @@ Nothing is generated, `cases` is empty and `skipped` has one reason, when:
 | `in` with a non-array or empty right side | `cannot satisfy ...` |
 | Two atoms need different values on the same field | `conflicting conditions on ...` |
 | An operand with a dot beyond one field level (`resource.address.city`, `actor.claim.a.b`) | `nested field ... is not generated yet` |
-| An `exists` placeholder has no value in the generated world | `cannot resolve {...}` |
+| An `exists` or lookup placeholder has no value in the generated world (both create `resource.*`/`incoming.*` values, so this is for `actor.claim.*`, `actor.role`, and so on) | `cannot resolve {...}` |
+| A lookup field with a dot (`doc(/a).plan.tier`) | `nested field ... is not generated yet` |
+| A lookup used with `ne`, `lt` or `gt` | `<op> conditions are not generated yet` |
 
 Per op, only that op is skipped (the others are still generated) and the reason is added to `skipped`:
 
 | Case | Reason |
 |---|---|
-| `create` and an atom reads the stored record (`resource.*`, or an `exists` doc containing `{resource.`) | `create: the condition reads the stored record, which does not exist on create` |
+| `create` and an atom reads the stored record (`resource.*`, an `exists` doc or lookup path containing `{resource.`, or an `exists` or lookup of the target document) | `create: the condition reads the stored record, which does not exist on create` |
+| A deny case that would have to break more than one atom (every pin makes another atom false), for example `exists(P)` together with a lookup on `P`: the case for that atom only | `<op>: cannot deny only <atom> (other conditions depend on the same values)` |
+| `read`, `list` or `delete` and an atom reads `incoming.*` (directly, or in an `exists` doc or lookup path). Only `create` and `update` send data, so the allow and deny cases would differ only in `expect` | `<op>: the condition reads the incoming write, which <op> does not send` |
 | `list` and the satisfied record has fields | `list: needs query filters to test; read cases cover the condition` |
 
 Parse and write with `parseTestFile` / `serializeTestFile`.

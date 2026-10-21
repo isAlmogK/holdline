@@ -3,6 +3,9 @@ import { hashRule } from '../src/hash.js'
 import { RuleSchema } from '../src/rules.js'
 import { parseTestFile, serializeTestFile } from '../src/testcase.js'
 import { generateTests } from '../src/testgen.js'
+import type { DataAccessRule } from '../src/rules.js'
+import { holds } from '../src/testgen-eval.js'
+import { freshWorld } from '../src/testgen-satisfy.js'
 
 const vocab = new Map()
 const rule = (raw: Record<string, unknown>) => RuleSchema.parse({ id: 'R-001', text: 't', status: 'approved', ...raw })
@@ -68,8 +71,10 @@ describe('generateTests for postgres', () => {
       { path: 'public.members', data: { team_id: 'value-1', user_id: 'user-1' } },
     ])
     expect(allowRead.do).toEqual({ op: 'read', path: 'public.dogs' })
+    // The claim is pinned first (no other atom reads it); the membership row keyed on the record stays.
     const denyClaim = file.cases[1]!
-    expect(denyClaim.seed[0]!.data).toEqual({ team_id: 'other-value' })
+    expect(denyClaim.as).toEqual({ uid: 'user-1', claims: { team_id: 'other-value' } })
+    expect(denyClaim.seed).toEqual(allowRead.seed)
     expect(file.cases.filter(c => c.do.op === 'update')[0]!.do.data).toEqual({ team_id: 'value-1' })
   })
 })
@@ -112,13 +117,15 @@ describe('generateTests fails loudly instead of guessing', () => {
   it('skips literal and actor.uid targets', () => {
     skippedOnly(fs({ atom: { op: 'eq', left: 'actor.uid', right: { literal: 'admin' } } }))
   })
-  it('skips exists placeholders nothing sets', () => {
+  it('skips exists placeholders it cannot make a value for', () => {
     skippedOnly(rule({
       type: 'data-access',
       target: { store: 'postgres', table: 'dogs' },
       ops: ['read'],
-      requires: { atom: { op: 'exists', doc: 'pg:public.m?o={resource.owner}' } },
+      requires: { atom: { op: 'exists', doc: 'pg:public.m?o={actor.claim.org}' } },
     }))
+    const f = generateTests(fs({ atom: { op: 'exists', doc: '/orgs/{actor.claim.orgId}' } }), vocab)!
+    expect(f.skipped).toEqual([expect.stringMatching(/cannot resolve \{actor\.claim\.orgId\}/)])
   })
   it('serializes without YAML anchors', () => {
     const f = generateTests(fs({ atom: { op: 'exists', doc: '/m/{actor.uid}' } }, ['read', 'update', 'delete']), vocab)!
@@ -192,5 +199,325 @@ cases:
 `
     expect(parseTestFile(text).cases[0]!.expect).toBe('reject')
     expect(() => parseTestFile(text.replace('expect: reject', 'expect: maybe'))).toThrow()
+  })
+})
+
+describe('generateTests with lookup operands', () => {
+  const vocab = new Map()
+  const rule = (requires: unknown, ops: string[] = ['read']) => RuleSchema.parse({
+    id: 'R-001', text: 't', status: 'approved', type: 'data-access',
+    target: { store: 'firestore', path: '/dogs/{dogId}' }, ops, requires,
+  })
+
+  it('seeds the looked-up document so membership holds, and breaks it on deny', () => {
+    const file = generateTests(rule({ and: [
+      { atom: { op: 'authenticated' } },
+      { atom: { op: 'in', left: 'resource.accountId', right: 'doc(/users/{actor.uid}).accountIds' } },
+    ] }), vocab)!
+    const [allow, denyAuth, denyMember] = file.cases
+    expect(allow!.expect).toBe('allow')
+    expect(allow!.seed).toEqual([
+      { path: '/dogs/dogId-1', data: { accountId: 'value-1' } },
+      { path: '/users/user-1', data: { accountIds: ['value-1'] } },
+    ])
+    expect(denyAuth!.as).toBeNull()
+    expect(denyMember!.expect).toBe('deny')
+    expect(denyMember!.seed.find(s => s.path === '/dogs/dogId-1')!.data).toEqual({ accountId: 'other-value' })
+  })
+
+  it('seeds a role field on a looked-up member document', () => {
+    const file = generateTests(rule({ atom: { op: 'eq', left: 'doc(/accounts/{resource.accountId}/members/{actor.uid}).role', right: { literal: 'admin' } } }), vocab)!
+    expect(file.skipped).toEqual([])
+    const allow = file.cases[0]!
+    expect(allow.seed).toContainEqual({ path: '/accounts/value-1/members/user-1', data: { role: 'admin' } })
+    expect(file.cases[1]!.seed).toContainEqual({ path: '/accounts/value-1/members/user-1', data: { role: 'other-value' } })
+  })
+
+  it('merges an exists doc and a lookup on the same path into one seed', () => {
+    const file = generateTests(rule({ and: [
+      { atom: { op: 'exists', doc: '/accounts/{resource.accountId}/members/{actor.uid}' } },
+      { atom: { op: 'eq', left: 'doc(/accounts/{resource.accountId}/members/{actor.uid}).role', right: { literal: 'admin' } } },
+    ] }), vocab)!
+    const memberSeeds = file.cases[0]!.seed.filter(s => s.path === '/accounts/value-1/members/user-1')
+    expect(memberSeeds).toEqual([{ path: '/accounts/value-1/members/user-1', data: { role: 'admin' } }])
+  })
+
+  it('skips a lookup whose path cannot be resolved', () => {
+    const file = generateTests(rule({ atom: { op: 'eq', left: 'doc(/orgs/{actor.claim.orgId}).open', right: { literal: true } } }), vocab)!
+    expect(file.cases).toEqual([])
+    expect(file.skipped[0]).toMatch(/cannot resolve \{actor\.claim\.orgId\}/)
+  })
+
+  it('creates a value for a stored-record field that only a lookup path needs', () => {
+    const file = generateTests(rule({ atom: { op: 'eq', left: 'doc(/orgs/{resource.orgId}).open', right: { literal: true } } }), vocab)!
+    expect(file.cases[0]!.seed).toEqual([
+      { path: '/dogs/dogId-1', data: { orgId: 'value-1' } },
+      { path: '/orgs/value-1', data: { open: true } },
+    ])
+  })
+
+  it('skips the exists deny case when a lookup needs the same document', () => {
+    const file = generateTests(rule({ and: [
+      { atom: { op: 'exists', doc: '/accounts/{resource.accountId}/members/{actor.uid}' } },
+      { atom: { op: 'eq', left: 'doc(/accounts/{resource.accountId}/members/{actor.uid}).role', right: { literal: 'admin' } } },
+    ] }), vocab)!
+    expect(file.cases.map(c => c.name)).toEqual([
+      'read: allowed when every condition holds',
+      expect.stringContaining('denied without doc(/accounts/{resource.accountId}/members/{actor.uid}).role'),
+    ])
+    expect(file.skipped).toEqual([expect.stringMatching(/^read: cannot deny only exists\(.*\) \(other conditions depend on the same values\)$/)])
+    const member = file.cases[1]!.seed.find(s => s.path === '/accounts/value-1/members/user-1')
+    expect(member!.data).toEqual({ role: 'other-value' })
+  })
+
+  describe('atoms that share values', () => {
+    const accountIds = 'doc(/users/{actor.uid}).accountIds'
+    const memberRole = 'doc(/accounts/{resource.accountId}/members/{actor.uid}).role'
+    const inUsers = { atom: { op: 'in', left: 'resource.accountId', right: accountIds } }
+    const isAdmin = { atom: { op: 'eq', left: memberRole, right: { literal: 'admin' } } }
+    const shape = (f: { cases: { name: string; as: unknown; seed: { path: string }[]; do: unknown; expect: string }[] }) =>
+      f.cases.map(c => ({ ...c, seed: [...c.seed].sort((x, y) => x.path.localeCompare(y.path)) })).sort((x, y) => x.name.localeCompare(y.name))
+
+    it('generates the same cases in either atom order', () => {
+      const ab = generateTests(rule({ and: [inUsers, isAdmin] }), vocab)!
+      const ba = generateTests(rule({ and: [isAdmin, inUsers] }), vocab)!
+      expect(ab.skipped).toEqual([])
+      expect(ba.skipped).toEqual([])
+      expect(ab.cases).toHaveLength(3)
+      expect(shape(ba)).toEqual(shape(ab))
+    })
+
+    it('uses an already set stored-record field when a path param fixes it', () => {
+      const file = generateTests(RuleSchema.parse({
+        id: 'R-001', text: 't', status: 'approved', type: 'data-access',
+        target: { store: 'firestore', path: '/accounts/{accountId}/dogs/{dogId}' }, ops: ['read'],
+        requires: { and: [
+          { atom: { op: 'eq', left: 'resource.accountId', right: 'param.accountId' } },
+          inUsers,
+        ] },
+      }), vocab)!
+      expect(file.skipped).toEqual([])
+      expect(file.cases[0]!.seed).toEqual([
+        { path: '/accounts/accountId-1/dogs/dogId-1', data: { accountId: 'accountId-1' } },
+        { path: '/users/user-1', data: { accountIds: ['accountId-1'] } },
+      ])
+    })
+
+    it('denies the membership atom without moving the record the role lookup is keyed on', () => {
+      const file = generateTests(rule({ and: [inUsers, isAdmin] }), vocab)!
+      const deny = file.cases.find(c => c.name.includes('denied without resource.accountId in'))!
+      expect(deny.seed).toContainEqual({ path: '/dogs/dogId-1', data: { accountId: 'value-1' } })
+      expect(deny.seed).toContainEqual({ path: '/accounts/value-1/members/user-1', data: { role: 'admin' } })
+      expect(deny.seed).toContainEqual({ path: '/users/user-1', data: { accountIds: ['other-value'] } })
+    })
+
+    it('denies exactly one atom when a path param fixes the record field the lookup is keyed on', () => {
+      const file = generateTests(RuleSchema.parse({
+        id: 'R-001', text: 't', status: 'approved', type: 'data-access',
+        target: { store: 'firestore', path: '/accounts/{accountId}/dogs/{dogId}' }, ops: ['read'],
+        requires: { and: [{ atom: { op: 'eq', left: 'resource.accountId', right: 'param.accountId' } }, isAdmin] },
+      }), vocab)!
+      expect(file.skipped).toEqual([])
+      const [, denyParam, denyRole] = file.cases
+      // The record no longer matches the path param; the member doc is keyed on the record's value and still has the role.
+      expect(denyParam!.seed).toEqual([
+        { path: '/accounts/accountId-1/dogs/dogId-1', data: { accountId: 'other-value' } },
+        { path: '/accounts/other-value/members/user-1', data: { role: 'admin' } },
+      ])
+      // The record matches the path param; only the role differs.
+      expect(denyRole!.seed).toEqual([
+        { path: '/accounts/accountId-1/dogs/dogId-1', data: { accountId: 'accountId-1' } },
+        { path: '/accounts/accountId-1/members/user-1', data: { role: 'other-value' } },
+      ])
+    })
+  })
+
+  it('merges a lookup of the target document into the record seed', () => {
+    const file = generateTests(rule({ atom: { op: 'eq', left: 'doc(/dogs/{param.dogId}).ownerId', right: 'actor.uid' } }), vocab)!
+    expect(file.skipped).toEqual([])
+    expect(file.cases[0]!.seed).toEqual([{ path: '/dogs/dogId-1', data: { ownerId: 'user-1' } }])
+    expect(file.cases[1]!.seed).toEqual([{ path: '/dogs/dogId-1', data: { ownerId: 'other-value' } }])
+  })
+
+  it('does not generate create for a lookup of the target document', () => {
+    const file = generateTests(rule({ atom: { op: 'eq', left: 'doc(/dogs/{param.dogId}).ownerId', right: 'actor.uid' } }, ['create']), vocab)!
+    expect(file.cases).toEqual([])
+    expect(file.skipped[0]).toMatch(/^create: the condition reads the stored record/)
+  })
+
+  it('skips dotted lookup fields and unsupported comparisons', () => {
+    const dotted = generateTests(rule({ atom: { op: 'eq', left: 'doc(/accounts/x).plan.tier', right: { literal: 'pro' } } }), vocab)!
+    expect(dotted.cases).toEqual([])
+    expect(dotted.skipped[0]).toMatch(/nested field/)
+    const lt = generateTests(rule({ atom: { op: 'lt', left: 'doc(/accounts/x).n', right: { literal: 3 } } }), vocab)!
+    expect(lt.cases).toEqual([])
+    expect(lt.skipped).toHaveLength(1)
+  })
+})
+
+describe('exists on the record under test', () => {
+  const r = rule({
+    type: 'data-access',
+    target: { store: 'firestore', path: '/dogs/{dogId}' },
+    ops: ['read', 'create'],
+    requires: { and: [
+      { atom: { op: 'exists', doc: '/dogs/{param.dogId}' } },
+      { atom: { op: 'eq', left: 'resource.ownerId', right: 'actor.uid' } },
+    ] },
+  })
+  const file = generateTests(r, vocab)!
+
+  it('seeds every path once, merging the exists doc into the record', () => {
+    expect(file.cases.length).toBeGreaterThan(0)
+    for (const c of file.cases) expect(new Set(c.seed.map(s => s.path)).size).toBe(c.seed.length)
+    expect(file.cases[0]!.seed).toEqual([{ path: '/dogs/dogId-1', data: { ownerId: 'user-1' } }])
+  })
+  it('skips create, where the record does not exist yet', () => {
+    const only = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'firestore', path: '/dogs/{dogId}' },
+      ops: ['create', 'read'],
+      requires: { atom: { op: 'exists', doc: '/dogs/{param.dogId}' } },
+    }), vocab)!
+    expect(only.cases.map(c => c.do.op)).toEqual(['read'])
+    expect(only.cases[0]!.seed).toEqual([{ path: '/dogs/dogId-1', data: {} }])
+    expect(only.skipped).toEqual([
+      'create: the condition reads the stored record, which does not exist on create',
+      expect.stringMatching(/^read: cannot deny only exists\(\/dogs\/\{param\.dogId\}\)/),
+    ])
+  })
+  it('does not treat exists(record) as true on create', () => {
+    const w = freshWorld(r as DataAccessRule)
+    const atom = { op: 'exists', doc: '/dogs/{param.dogId}' } as const
+    expect(holds(w, atom)).toBe(true)
+    expect(holds(w, atom, 'create')).toBe(false)
+  })
+})
+
+describe('ops that send no data', () => {
+  it('skips read, list and delete when a condition reads the incoming write', () => {
+    const f = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'firestore', path: '/dogs/{dogId}' },
+      ops: ['read', 'update', 'delete'],
+      requires: { atom: { op: 'eq', left: 'incoming.status', right: { literal: 'active' } } },
+    }), vocab)!
+    expect(f.cases.map(c => [c.do.op, c.expect])).toEqual([['update', 'allow'], ['update', 'deny']])
+    expect(f.skipped).toEqual([
+      'read: the condition reads the incoming write, which read does not send',
+      'delete: the condition reads the incoming write, which delete does not send',
+    ])
+  })
+  it('also when the incoming write is read inside a lookup path', () => {
+    const viaLookup = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'firestore', path: '/dogs/{dogId}' },
+      ops: ['delete'],
+      requires: { atom: { op: 'eq', left: 'doc(/orgs/{incoming.orgId}).open', right: { literal: true } } },
+    }), vocab)!
+    expect(viaLookup.cases).toEqual([])
+    expect(viaLookup.skipped).toEqual(['delete: the condition reads the incoming write, which delete does not send'])
+  })
+})
+
+describe('exists keyed on a record field nothing else sets', () => {
+  // The deny case for the exists atom must equal the allow case except for the missing row or doc.
+  const onlyMissing = (f: ReturnType<typeof generateTests>, op: string, missing: string) => {
+    const cases = f!.cases.filter(c => c.do.op === op)
+    const allow = cases.find(c => c.expect === 'allow')!
+    const deny = cases.find(c => c.name.startsWith(`${op}: denied without exists(`))!
+    expect(allow.seed.some(s => s.path === missing)).toBe(true)
+    expect({ ...deny, name: allow.name, expect: 'allow' }).toEqual({ ...allow, seed: allow.seed.filter(s => s.path !== missing) })
+  }
+
+  it('makes a value for the placeholder of a postgres membership row', () => {
+    const f = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'postgres', table: 'projects' },
+      ops: ['read'],
+      requires: { and: [
+        { atom: { op: 'authenticated' } },
+        { atom: { op: 'exists', doc: 'pg:public.memberships?org_id={resource.org_id}&user_id={actor.uid}' } },
+      ] },
+    }), vocab)!
+    expect(f.skipped).toEqual([])
+    expect(f.cases.map(c => c.expect)).toEqual(['allow', 'deny', 'deny'])
+    expect(f.cases[0]!.seed).toEqual([
+      { path: 'public.projects', data: { org_id: 'value-1' } },
+      { path: 'public.memberships', data: { org_id: 'value-1', user_id: 'user-1' } },
+    ])
+    onlyMissing(f, 'read', 'public.memberships')
+  })
+
+  it('makes a value for the placeholder of a firestore member doc', () => {
+    const f = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'firestore', path: '/projects/{projectId}' },
+      ops: ['read', 'update'],
+      requires: { and: [
+        { atom: { op: 'authenticated' } },
+        { atom: { op: 'exists', doc: '/orgs/{resource.orgId}/members/{actor.uid}' } },
+      ] },
+    }), vocab)!
+    expect(f.skipped).toEqual([])
+    expect(f.cases[0]!.seed).toEqual([
+      { path: '/projects/projectId-1', data: { orgId: 'value-1' } },
+      { path: '/orgs/value-1/members/user-1', data: {} },
+    ])
+    onlyMissing(f, 'read', '/orgs/value-1/members/user-1')
+    onlyMissing(f, 'update', '/orgs/value-1/members/user-1')
+  })
+
+  it('makes a value for an incoming placeholder and skips the ops that send no data', () => {
+    const f = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'firestore', path: '/dogs/{dogId}' },
+      ops: ['list', 'update'],
+      requires: { atom: { op: 'exists', doc: '/orgs/{incoming.orgId}' } },
+    }), vocab)!
+    expect(f.skipped).toEqual(['list: the condition reads the incoming write, which list does not send'])
+    expect(f.cases[0]!.do.data).toEqual({ orgId: 'value-1' })
+    onlyMissing(f, 'update', '/orgs/value-1')
+  })
+})
+
+describe('seed stores in storage test files', () => {
+  const f = generateTests(rule({
+    type: 'data-access',
+    target: { store: 'storage', path: '/orgs/{orgId}/files/{fileId}' },
+    ops: ['read'],
+    requires: { atom: { op: 'exists', doc: '/orgs/{param.orgId}/members/{actor.uid}' } },
+  }), vocab)!
+
+  it('marks the object as storage and the looked-up docs as firestore', () => {
+    expect(f.cases[0]!.seed).toEqual([
+      { path: '/orgs/orgId-1/files/fileId-1', store: 'storage', data: {} },
+      { path: '/orgs/orgId-1/members/user-1', store: 'firestore', data: {} },
+    ])
+    expect(f.cases[1]!.seed).toEqual([{ path: '/orgs/orgId-1/files/fileId-1', store: 'storage', data: {} }])
+  })
+  it('keeps the store through YAML', () => {
+    expect(serializeTestFile(f)).toContain('store: firestore')
+    expect(parseTestFile(serializeTestFile(f))).toEqual(f)
+  })
+  it('leaves the store unset in firestore and postgres files', () => {
+    const fsFile = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'firestore', path: '/orgs/{orgId}/files/{fileId}' },
+      ops: ['read'],
+      requires: { atom: { op: 'exists', doc: '/orgs/{param.orgId}/members/{actor.uid}' } },
+    }), vocab)!
+    const pgFile = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'postgres', table: 'files' },
+      ops: ['read'],
+      requires: { atom: { op: 'exists', doc: 'pg:public.members?user_id={actor.uid}' } },
+    }), vocab)!
+    for (const c of [...fsFile.cases, ...pgFile.cases]) for (const s of c.seed) expect('store' in s).toBe(false)
+  })
+  it('rejects an unknown seed store', () => {
+    const text = 'rule: R-001\ngeneratedFrom: x\nstore: storage\ncases:\n  - name: n\n    as: null\n    seed: [{ path: /a, store: s3, data: {} }]\n    do: { op: read, path: /a }\n    expect: deny\n'
+    expect(() => parseTestFile(text)).toThrow()
+    expect(parseTestFile(text.replace('s3', 'storage')).cases[0]!.seed[0]!.store).toBe('storage')
   })
 })
