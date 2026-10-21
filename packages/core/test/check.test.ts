@@ -181,10 +181,11 @@ describe('runChecks bookkeeping', () => {
   it('skips pending and muted rules and counts muted', () => {
     const f = file([base])
     f.rules.push(RuleSchema.parse({ ...base, id: 'R-002', status: 'pending' }))
-    f.rules.push({ ...approvedRule({ ...base, id: 'R-003' }), status: 'muted' })
+    f.rules.push({ ...approvedRule({ ...base, id: 'R-003' }), status: 'muted', muted: { by: 'almog', at: '2026-10-22', reason: 'migrating' } })
     const out = runChecks(parseFacts({ version: 1, ...facts }), f)
     expect(out.results.map(r => r.rule)).toEqual(['R-001'])
     expect(out.muted).toBe(1)
+    expect(out.mutedRules).toEqual([{ id: 'R-003', text: 'Sign-in for /a', by: 'almog', at: '2026-10-22', reason: 'migrating' }])
     expect(summarize(out.results, out.muted)).toMatchObject({ pass: 1, violation: 0, muted: 1, rules: 1 })
   })
   it('turns a violation into unknown when evidence sits in a file an analyzer could not read', () => {

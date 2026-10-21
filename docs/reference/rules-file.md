@@ -22,7 +22,10 @@ rules:                 # optional, default []
 ```
 
 `parseRulesFile(text)` throws `RulesFileError` on invalid YAML, any schema violation (unknown keys are errors),
-a duplicate rule id, or a failed semantic check (see "Invariant" below). An empty file is an empty rules file.
+a duplicate rule id, a failed semantic check (see "Invariant" below), a rule with `status: pending`
+(`<id>: pending rules belong in .holdline/pending.yaml; approve them with holdline approve`), a rule with
+`status: muted` and no `muted` block, or a `muted` block on a rule whose status is not `muted`. An empty file is an
+empty rules file.
 `serializeRulesFile` writes YAML with no line wrapping.
 
 ## Rule fields (all types)
@@ -35,9 +38,9 @@ a duplicate rule id, or a failed semantic check (see "Invariant" below). An empt
 | `target` | depends on type | See each type |
 | `evidence` | string[] (default `[]`) | Symbol ids that showed the rule at inference time. Not hashed |
 | `enforce` | `static` `test` `audit` list, optional | Defaults below |
-| `status` | `pending` `approved` `muted` | |
+| `status` | `approved` `muted` (`pending` exists in the schema but is rejected in `holdline.rules`) | Pending rules live only in `.holdline/pending.yaml` |
 | `approved` | `{ by, at, hash }`, optional | Written by `approve`; never by hand |
-| `muted` | `{ by, at, reason }`, optional | `reason` is required and non-empty |
+| `muted` | `{ by, at, reason }` | Present exactly when `status: muted`. `reason` is required and non-empty |
 
 ### Targets
 
@@ -205,8 +208,9 @@ parse time and, if constructed in code, reported as a violation ("not supported 
 | `violation` | One result per failing item |
 | `pass` | Everything is proven |
 
-`runChecks(facts, file, { only })` skips `pending` rules, counts and skips `muted` rules (`muted` in the return value),
-and checks the rest. `summarize` counts each rule once under its worst status, ordered
+`runChecks(facts, file, { only })` returns `{ results, muted, mutedRules }`. It skips `pending` rules (only possible
+for a file built in code), does not check `muted` rules but returns each as `{ id, text, by, at, reason }` in
+`mutedRules` (`muted` is their count), and checks the rest. `summarize` counts each rule once under its worst status, ordered
 `pass < violation < stale < unknown < unapproved-edit`.
 
 ## Vocabulary and recognizers
@@ -245,8 +249,17 @@ Never edit `approved.hash` by hand. After editing `holdline.rules` text in a fix
 
 ## Muting
 
-`mute(file, id, { by, at, reason })` sets `status: muted` and records `muted`. Muted rules are not checked and are
-counted in the summary. Re-approving a muted rule (`approve` with its id) restamps its hash, sets `approved` status and
+`mute(file, id, { by, at, reason })` sets `status: muted` and records `muted`. Muted rules are not checked, but they
+stay visible in every `holdline check` format:
+
+| Format | How muted rules appear |
+|---|---|
+| human | One line each after the summary: `- R-002 muted by <by> on <at>: <reason>` |
+| agent | Appended to the first (summary) line: ` 1 rule muted: R-002 (<reason>)`, or ` <k> rules muted: R-002 (<reason>), R-005 (<reason>)` |
+| json | `mutedRules: [{ id, text, by, at, reason }]` next to `summary` |
+
+With no approved rules to check, the agent format prints `Holdline: no approved rules to check.` (plus the muted
+note, if any). Re-approving a muted rule (`approve` with its id) restamps its hash, sets `approved` status and
 removes `muted`. `reason` is required.
 
 ## Proposals and pending rules

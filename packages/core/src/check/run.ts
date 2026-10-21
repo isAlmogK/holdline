@@ -34,15 +34,23 @@ export function checkRule(rule: Rule, ctx: CheckContext): Result[] {
   return outcome.violations.map(v => ({ rule: rule.id, status: 'violation' as const, target, ...v }))
 }
 
-export function runChecks(facts: Facts, file: RulesFile, opts: { only?: string[] } = {}): { results: Result[]; muted: number } {
+export type MutedRule = { id: string; text: string; by: string; at: string; reason: string }
+
+export function runChecks(
+  facts: Facts, file: RulesFile, opts: { only?: string[] } = {},
+): { results: Result[]; muted: number; mutedRules: MutedRule[] } {
   const ctx: CheckContext = { index: new FactIndex(facts), vocab: vocabularyMap(file) }
   const results: Result[] = []
-  let muted = 0
+  const mutedRules: MutedRule[] = []
   for (const rule of file.rules) {
     if (opts.only && !opts.only.includes(rule.id)) continue
-    if (rule.status === 'muted') { muted++; continue }
+    if (rule.status === 'muted') {
+      const m = rule.muted ?? { by: 'unknown', at: 'unknown', reason: 'no reason recorded' }
+      mutedRules.push({ id: rule.id, text: rule.text, by: m.by, at: m.at, reason: m.reason })
+      continue
+    }
     if (rule.status === 'pending') continue
     results.push(...checkRule(rule, ctx))
   }
-  return { results, muted }
+  return { results, muted: mutedRules.length, mutedRules }
 }

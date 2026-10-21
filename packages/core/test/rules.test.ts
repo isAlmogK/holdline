@@ -29,7 +29,7 @@ rules:
     target: { store: postgres, table: dogs }
     kind: not-null
     columns: [team_id]
-    status: pending
+    status: approved
 `
 
 describe('parseRulesFile', () => {
@@ -52,6 +52,19 @@ describe('parseRulesFile', () => {
     const dup = yamlText.replace('id: R-002', 'id: R-001')
     expect(() => parseRulesFile(dup)).toThrow(/duplicate rule id R-001/)
   })
+  it('rejects pending rules: they belong in .holdline/pending.yaml', () => {
+    const pending = yamlText.replace('columns: [team_id]\n    status: approved', 'columns: [team_id]\n    status: pending')
+    expect(() => parseRulesFile(pending)).toThrow(RulesFileError)
+    expect(() => parseRulesFile(pending)).toThrow('R-002: pending rules belong in .holdline/pending.yaml; approve them with holdline approve')
+  })
+  it('requires a muted block exactly when status is muted', () => {
+    const mutedNoBlock = yamlText.replace('columns: [team_id]\n    status: approved', 'columns: [team_id]\n    status: muted')
+    expect(() => parseRulesFile(mutedNoBlock)).toThrow('R-002: status muted needs a muted block (by, at, reason)')
+    const blockNotMuted = yamlText.replace('columns: [team_id]\n    status: approved', 'columns: [team_id]\n    status: approved\n    muted: { by: a, at: "2026-10-21", reason: noisy }')
+    expect(() => parseRulesFile(blockNotMuted)).toThrow('R-002: a muted block needs status: muted')
+    const ok = yamlText.replace('columns: [team_id]\n    status: approved', 'columns: [team_id]\n    status: muted\n    muted: { by: a, at: "2026-10-21", reason: noisy }')
+    expect(parseRulesFile(ok).rules[1]!.status).toBe('muted')
+  })
   it('rejects invariants missing their kind-specific fields', () => {
     const bad = yamlText.replace('kind: not-null', 'kind: fk')
     expect(() => parseRulesFile(bad)).toThrow(/R-002: fk needs references/)
@@ -65,7 +78,7 @@ rules:
   - id: R-001
     text: t
     type: invariant
-    status: pending
+    status: approved
     target: { store: firestore, path: "/dogs/{dogId}" }
     kind: ${kind}
     columns: [name]

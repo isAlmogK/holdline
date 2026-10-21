@@ -1,16 +1,24 @@
-import { formatExpr, type Result, type Summary } from '@holdline/core'
+import { formatExpr, type MutedRule, type Result, type Summary } from '@holdline/core'
 import { where } from './where.js'
 
-export function formatAgent(results: Result[], summary: Summary, texts: Map<string, string>): string {
+function mutedNote(mutedRules: MutedRule[]): string {
+  if (mutedRules.length === 0) return ''
+  const k = mutedRules.length
+  return ` ${k} ${k === 1 ? 'rule' : 'rules'} muted: ${mutedRules.map(m => `${m.id} (${m.reason})`).join(', ')}`
+}
+
+export function formatAgent(results: Result[], summary: Summary, texts: Map<string, string>, mutedRules: MutedRule[] = []): string {
+  const muted = mutedNote(mutedRules)
+  if (results.length === 0) return `Holdline: no approved rules to check.${muted}\n`
   const failing = results.filter(r => r.status === 'violation' || r.status === 'unapproved-edit')
   if (failing.length === 0) {
     const n = summary.pass
     const extra = summary.stale + summary.unknown > 0 ? ` (${summary.stale} stale, ${summary.unknown} unknown; run holdline check for details)` : ''
-    return `Holdline: all ${n} approved ${n === 1 ? 'rule passes' : 'rules pass'}.${extra}\n`
+    return `Holdline: all ${n} approved ${n === 1 ? 'rule passes' : 'rules pass'}.${extra}${muted}\n`
   }
   const rules = new Set(failing.map(r => r.rule)).size
   const lines = [
-    `Holdline: ${rules} approved ${rules === 1 ? 'rule is' : 'rules are'} broken. Fix the code so the rules hold again. Do not edit holdline.rules.`,
+    `Holdline: ${rules} approved ${rules === 1 ? 'rule is' : 'rules are'} broken. Fix the code so the rules hold again. Do not edit holdline.rules.${muted}`,
   ]
   for (const r of failing) {
     if (r.status === 'unapproved-edit') {

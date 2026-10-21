@@ -139,6 +139,9 @@ export function parseRulesFile(text: string, source = 'holdline.rules'): RulesFi
     if (seen.has(rule.id)) problems.push(`duplicate rule id ${rule.id}`)
     seen.add(rule.id)
     problems.push(...validateRuleSemantics(rule).map(p => `${rule.id}: ${p}`))
+    if (rule.status === 'pending') problems.push(`${rule.id}: pending rules belong in .holdline/pending.yaml; approve them with holdline approve`)
+    if (rule.status === 'muted' && !rule.muted) problems.push(`${rule.id}: status muted needs a muted block (by, at, reason)`)
+    if (rule.status !== 'muted' && rule.muted) problems.push(`${rule.id}: a muted block needs status: muted`)
   }
   if (problems.length > 0) throw new RulesFileError(`${source}: ${problems.join('; ')}`)
   return parsed.data
