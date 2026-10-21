@@ -2,10 +2,8 @@ import type { Expr } from '@holdline/core'
 import { isAnonKeyOperand } from './atoms.js'
 import type { NormalizeEnv } from './normalize.js'
 import { operand } from './operand.js'
-import { subqueryScope, type Scope } from './scope.js'
+import { PLAIN_NAME, subqueryScope, type Scope } from './scope.js'
 import { constant, kindOf, nameList, type SqlNode } from './sql-ast.js'
-
-const AMBIGUOUS = /[&=?{}]/ // would make the doc ambiguous
 
 // An outer operand an exists doc can hold. Not a claim: SQL compares its text (`->>`) with the column, while its
 // JSON value may be a number or a boolean. Not the role or an anon-key claim: an exists doc with {actor.…} is false
@@ -98,9 +96,10 @@ function innerColumn(node: SqlNode | undefined, scope: Scope): string | undefine
   return r && 'inner' in r ? r.inner : undefined
 }
 
-// Columns sorted by name: two exists atoms match only when their docs are string-equal.
+// Columns sorted by name: two exists atoms match only when their docs are string-equal. Schema, table and column
+// names are plain (`&`, `=`, `?`, `{`, `}` would make the doc ambiguous).
 function existsAtom(table: string, conditions: [string, string][]): Expr | undefined {
-  if (conditions.length === 0 || [table, ...conditions.map(([c]) => c)].some(n => AMBIGUOUS.test(n))) return undefined
+  if (conditions.length === 0 || [...table.split('.'), ...conditions.map(([c]) => c)].some(n => !PLAIN_NAME.test(n))) return undefined
   const byColumn = new Map<string, string>()
   for (const [col, o] of conditions) {
     if (byColumn.has(col) && byColumn.get(col) !== o) return undefined

@@ -13,6 +13,9 @@ export interface Scope {
 
 const split = (table: string) => table.split('.') as [string, string]
 
+// A name an operand or an exists doc can hold (core's OPERAND_PATTERN); any other name makes the condition opaque.
+export const PLAIN_NAME = /^[A-Za-z0-9_]+$/
+
 // The policy's table: in USING its columns are the stored record, in WITH CHECK the incoming row.
 export function tableScope(table: string, columns: ReadonlySet<string>, side: Side): Scope {
   const [schema, name] = split(table)
@@ -21,7 +24,7 @@ export function tableScope(table: string, columns: ReadonlySet<string>, side: Si
       const col = fields.at(-1)!
       const q = fields.slice(0, -1)
       const ours = q.length === 0 || (q.length === 1 && q[0] === name) || (q.length === 2 && q[0] === schema && q[1] === name)
-      return ours && columns.has(col) ? { operand: `${side}.${col}` } : undefined
+      return ours && columns.has(col) && PLAIN_NAME.test(col) ? { operand: `${side}.${col}` } : undefined
     },
     param: () => undefined,
   }
@@ -50,7 +53,8 @@ export function subqueryScope(table: string, alias: string, columns: ReadonlySet
         : (q.length === 1 && q[0] === alias) || (q.length === 2 && alias === name && q[0] === schema && q[1] === name)
       if (ours) return columns.has(col) ? { inner: col } : { blocked: true }
       const outer = parent.column(fields)
-      return outer && 'inner' in outer ? { blocked: true } : outer
+      if (outer && 'inner' in outer) return { blocked: true }
+      return outer && 'operand' in outer && !PLAIN_NAME.test(col) ? undefined : outer
     },
     param: n => parent.param(n),
   }
