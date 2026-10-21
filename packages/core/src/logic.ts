@@ -27,34 +27,47 @@ function normalizeAtom(a: Atom): Atom {
   return a
 }
 
-function mentionsActor(a: Atom): boolean {
+// Only atoms that are false for an anonymous caller imply `authenticated`. Store semantics that
+// deny anonymous callers (Firestore, RLS) are the analyzers' job: they add an explicit `authenticated` atom.
+function impliesAuthenticated(a: Atom): boolean {
   switch (a.op) {
     case 'authenticated': return true
     case 'exists': return a.doc.includes('{actor.')
-    case 'isNull': return isActor(a.operand)
-    default: return isActor(a.left) || isActor(a.right)
+    case 'eq':
+    case 'in': {
+      const [actorSide, other] = isActor(a.left) ? [a.left, a.right] : isActor(a.right) ? [a.right, a.left] : [undefined, undefined]
+      if (actorSide === undefined || other === undefined || !isLiteral(other)) return false
+      const v = other.literal
+      if (a.op === 'in') return Array.isArray(v) && v.length > 0
+      return typeof v === 'string' || typeof v === 'number'
+    }
+    default: return false
   }
 }
 
-function literalSet(o: Operand): (string | number)[] | undefined {
+function arrayLiteral(o: Operand): (string | number)[] | undefined {
+  return isLiteral(o) && Array.isArray(o.literal) ? o.literal : undefined
+}
+
+function scalarLiteral(o: Operand): (string | number)[] | undefined {
   if (!isLiteral(o)) return undefined
   const v = o.literal
-  if (Array.isArray(v)) return v
   return typeof v === 'string' || typeof v === 'number' ? [v] : undefined
 }
 
 export function atomImplies(rawA: Atom, rawB: Atom): boolean {
   const a = normalizeAtom(rawA)
   const b = normalizeAtom(rawB)
-  if (b.op === 'authenticated') return mentionsActor(a)
+  if (deepEqual(a, b)) return true
+  if (b.op === 'authenticated') return impliesAuthenticated(a)
   if (a.op === 'authenticated') return false
   if (b.op === 'exists') return a.op === 'exists' && a.doc === b.doc
   if (b.op === 'isNull') return a.op === 'isNull' && deepEqual(a.operand, b.operand)
   if (a.op === 'exists' || a.op === 'isNull') return false
   if (b.op === 'in') {
     if ((a.op !== 'in' && a.op !== 'eq') || !deepEqual(a.left, b.left)) return false
-    const have = literalSet(a.right)
-    const allowed = literalSet(b.right)
+    const have = a.op === 'in' ? arrayLiteral(a.right) : scalarLiteral(a.right)
+    const allowed = arrayLiteral(b.right)
     return !!have && !!allowed && have.every(v => allowed.includes(v))
   }
   if (a.op !== b.op) return false
