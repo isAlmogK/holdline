@@ -114,7 +114,12 @@ export type Diagnostic = z.output<typeof DiagnosticSchema>
 export type Facts = z.output<typeof FactsSchema>
 export type FactsInput = z.input<typeof FactsSchema>
 
-export class FactsError extends Error {}
+export class FactsError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'FactsError'
+  }
+}
 
 export function parseFacts(json: unknown, source = 'facts'): Facts {
   const parsed = FactsSchema.safeParse(json)
