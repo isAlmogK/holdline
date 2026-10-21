@@ -6,8 +6,10 @@ export type Segment =
 export function parsePattern(path: string): Segment[] {
   return path.split('/').filter(Boolean).map((s): Segment => {
     const m = /^\{([A-Za-z0-9_.]+)(=\*\*)?\}$/.exec(s)
-    if (!m) return { kind: 'literal', value: s }
-    return m[2] ? { kind: 'rest', name: m[1]! } : { kind: 'param', name: m[1]! }
+    if (m) return m[2] ? { kind: 'rest', name: m[1]! } : { kind: 'param', name: m[1]! }
+    // A malformed brace segment is not a literal: treat it as a conservative wildcard.
+    if (/[{}]/.test(s)) return { kind: 'param', name: s }
+    return { kind: 'literal', value: s }
   })
 }
 
@@ -43,12 +45,25 @@ export function concretize(path: string, value: (param: string) => string): stri
 }
 
 export function routeMatches(selector: string, route: { id: string; method: string; path: string }): boolean {
-  if (selector.startsWith('route:')) return selector === route.id
-  const m = /^(\S+)\s+(\/\S*)$/.exec(selector.trim())
+  const sel = selector.trim()
+  if (sel.startsWith('route:')) return sel === route.id
+  const m = /^(\S+)\s+(\/\S*)$/.exec(sel)
   if (!m) throw new Error(`invalid route selector "${selector}": expected "METHOD /path" or "route:METHOD /path"`)
   const method = m[1]!
   if (method !== '*' && method.toUpperCase() !== route.method.toUpperCase()) return false
-  return globMatch(m[2]!.split('/').filter(Boolean), route.path.split('/').filter(Boolean))
+  return globMatch(canonicalSegments(m[2]!), canonicalSegments(route.path))
+}
+
+// Route params are written {x}, <x> or <type:x>; all of them canonicalize to :x.
+// {x=**} canonicalizes to the rest glob **.
+function canonicalSegments(path: string): string[] {
+  return path.split('/').filter(Boolean).map((s): string => {
+    const brace = /^\{([A-Za-z0-9_.]+)(=\*\*)?\}$/.exec(s)
+    if (brace) return brace[2] ? '**' : `:${brace[1]}`
+    const angle = /^<(?:[A-Za-z0-9_]+:)?([A-Za-z0-9_]+)>$/.exec(s)
+    if (angle) return `:${angle[1]}`
+    return s
+  })
 }
 
 function globMatch(glob: string[], segs: string[]): boolean {
@@ -56,7 +71,13 @@ function globMatch(glob: string[], segs: string[]): boolean {
   const [head, ...rest] = glob
   if (head === '**') return segs.some((_, i) => globMatch(rest, segs.slice(i))) || globMatch(rest, [])
   if (segs.length === 0) return false
-  return (head === '*' || head === segs[0]) && globMatch(rest, segs.slice(1))
+  return segmentMatches(head!, segs[0]!) && globMatch(rest, segs.slice(1))
+}
+
+function segmentMatches(pattern: string, seg: string): boolean {
+  if (pattern === '*') return true
+  if (pattern.startsWith(':')) return seg.startsWith(':')
+  return pattern === seg
 }
 
 export function normalizeTable(name: string): string {

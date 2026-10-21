@@ -49,3 +49,45 @@ describe('normalizeTable', () => {
     expect(normalizeTable('audit.events')).toBe('audit.events')
   })
 })
+
+describe('malformed brace segments', () => {
+  it('treat malformed brace segments as conservative wildcards', () => {
+    expect(patternsOverlap('/a/{doc-id}', '/a/x')).toBe(true)
+    expect(patternsOverlap('/a/{$x}', '/a/x')).toBe(true)
+    expect(patternsOverlap('/a/{x=*}', '/a/x')).toBe(true)
+  })
+})
+
+describe('overlap safety', () => {
+  it('is symmetric for rest params', () => {
+    expect(patternsOverlap('/a/b/c', '/a/{r=**}')).toBe(true)
+    expect(patternsOverlap('/a/{r=**}', '/a/b/c')).toBe(true)
+    expect(patternsOverlap('/a/{r=**}/z', '/a/b')).toBe(true)
+  })
+  it('overlaps the root path with itself and with a rest pattern', () => {
+    expect(patternsOverlap('/', '/')).toBe(true)
+    expect(patternsOverlap('/', '/{d=**}')).toBe(true)
+    expect(patternsOverlap('/', '/a')).toBe(false)
+  })
+  it('ignores trailing and double slashes', () => {
+    expect(patternsOverlap('/a//b/', '/a/b')).toBe(true)
+  })
+})
+
+describe('route param normalization', () => {
+  const route = (method: string, path: string) => ({ id: `route:${method} ${path}`, method, path })
+  it('matches :name selectors against brace and angle route params', () => {
+    expect(routeMatches('GET /dogs/:id', route('GET', '/dogs/{id}'))).toBe(true)
+    expect(routeMatches('GET /dogs/:id', route('GET', '/dogs/<int:id>'))).toBe(true)
+    expect(routeMatches('GET /dogs/:id', route('GET', '/dogs/:id'))).toBe(true)
+  })
+  it('does not match a :name selector against a literal segment', () => {
+    expect(routeMatches('GET /dogs/:id', route('GET', '/dogs/special'))).toBe(false)
+  })
+  it('normalizes brace params in the selector too', () => {
+    expect(routeMatches('GET /dogs/{id}', route('GET', '/dogs/:id'))).toBe(true)
+  })
+  it('trims the selector before the route: prefix check', () => {
+    expect(routeMatches(' route:GET /teams', route('GET', '/teams'))).toBe(true)
+  })
+})

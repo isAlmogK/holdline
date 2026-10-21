@@ -40,3 +40,9 @@ describe('mergeFacts', () => {
     expect(m.calls).toEqual([['x', 'y'], ['y', 'z']])
   })
 })
+
+describe('FactsError', () => {
+  it('names itself', () => {
+    expect(new FactsError('x').name).toBe('FactsError')
+  })
+})
