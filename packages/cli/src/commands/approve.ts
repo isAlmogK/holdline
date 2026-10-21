@@ -15,9 +15,10 @@ export async function writeTests(root: string, file: RulesFile, ids: string[]): 
 export async function approveCommand(keys: string[], opts: { all?: boolean }, io: Io): Promise<number> {
   if (!opts.all && keys.length === 0) throw new UsageError('approve needs keys (P-1, R-003) or --all')
   const pending = await loadPending(io.cwd)
-  let result
+  const file = await loadRules(io.cwd)
+  let result: ReturnType<typeof approve>
   try {
-    result = approve(await loadRules(io.cwd), pending, opts.all ? 'all' : keys, { by: approver(io), at: today(io) })
+    result = approve(file, pending, opts.all ? 'all' : keys, { by: approver(io), at: today(io) })
   } catch (e) {
     throw new UsageError((e as Error).message)
   }
@@ -29,11 +30,14 @@ export async function approveCommand(keys: string[], opts: { all?: boolean }, io
 }
 
 export async function rejectCommand(keys: string[], io: Io): Promise<number> {
+  const pending = await loadPending(io.cwd)
+  let next: ReturnType<typeof reject>
   try {
-    await savePending(io.cwd, reject(await loadPending(io.cwd), keys))
+    next = reject(pending, keys)
   } catch (e) {
     throw new UsageError((e as Error).message)
   }
+  await savePending(io.cwd, next)
   io.stdout(`Rejected ${keys.join(', ')}\n`)
   return 0
 }
