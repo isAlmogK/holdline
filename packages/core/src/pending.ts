@@ -120,6 +120,7 @@ export function approve(
     if (problems.length > 0) throw new Error(`${key}: ${problems.join('; ')}`)
     const id = nextRuleId(next)
     next.rules.push(stamp(RuleSchema.parse({ ...p.rule, id, status: 'approved' })))
+    next.lastRuleId = Number(id.slice(2))
     approved.push({ key, id })
   }
 

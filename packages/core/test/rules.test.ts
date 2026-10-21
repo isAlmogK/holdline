@@ -195,4 +195,12 @@ describe('helpers', () => {
     expect(nextRuleId(f)).toBe('R-003')
     expect(nextRuleId(emptyRulesFile())).toBe('R-001')
   })
+  it('nextRuleId never reuses an id below lastRuleId', () => {
+    const f = parseRulesFile(`${yamlText}lastRuleId: 7\n`)
+    expect(f.lastRuleId).toBe(7)
+    expect(nextRuleId(f)).toBe('R-008')
+    expect(nextRuleId({ ...f, lastRuleId: 1 })).toBe('R-003')
+    expect(() => parseRulesFile(`${yamlText}lastRuleId: -1\n`)).toThrow(RulesFileError)
+    expect(() => parseRulesFile(`${yamlText}lastRuleId: 1.5\n`)).toThrow(RulesFileError)
+  })
 })

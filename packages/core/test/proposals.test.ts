@@ -108,6 +108,18 @@ describe('pending and approval', () => {
     const { file } = approve(emptyRulesFile(), pending, ['P-2'], { by: 'a', at: 'b' })
     expect(() => approve(file, pending, ['P-1'], { by: 'a', at: 'b' })).toThrow(/staff/)
   })
+  it('never reuses a deleted rule id', () => {
+    const first = approve(emptyRulesFile(), pending, 'all', { by: 'a', at: 'b' })
+    expect(first.file.rules.map(r => r.id)).toEqual(['R-001', 'R-002'])
+    expect(first.file.lastRuleId).toBe(2)
+    const deleted = { ...first.file, rules: first.file.rules.filter(r => r.id !== 'R-002') }
+    const more = addToPending(emptyPending(), validateProposals({ vocabulary: [], rules: [{ ...transferRule, text: 'Admins transfer', requires: { atom: { op: 'authenticated' } } }] }, facts, deleted))
+    const second = approve(deleted, more.pending, ['P-1'], { by: 'a', at: 'b' })
+    expect(second.approved).toEqual([{ key: 'P-1', id: 'R-003' }])
+    expect(second.file.lastRuleId).toBe(3)
+    const reapproved = approve(second.file, emptyPending(), ['R-001'], { by: 'a', at: 'c' })
+    expect(reapproved.file.lastRuleId).toBe(3)
+  })
   it('approve de-duplicates keys', () => {
     const out = approve(emptyRulesFile(), pending, ['P-2', 'P-2'], { by: 'a', at: 'b' })
     expect(out.file.rules).toHaveLength(1)

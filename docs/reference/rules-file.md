@@ -19,6 +19,7 @@ vocabulary:            # optional, default []
 rules:                 # optional, default []
   - id: R-001
     ...
+lastRuleId: 1          # optional int >= 0, written by approve
 ```
 
 `parseRulesFile(text)` throws `RulesFileError` on invalid YAML, any schema violation (unknown keys are errors),
@@ -32,7 +33,7 @@ empty rules file.
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | `R-` and 3 or more digits | `R-001`. `nextRuleId` takes max + 1 |
+| `id` | `R-` and 3 or more digits | `R-001`. Never reused: `nextRuleId` takes `max(lastRuleId ?? 0, highest existing id) + 1`, and `approve` sets the file's `lastRuleId` to the highest id it assigned, so deleting the top rule does not free its id |
 | `text` | string | The plain language rule. Part of the approval hash |
 | `type` | `access` `data-access` `visibility` `flow` `invariant` | |
 | `target` | depends on type | See each type |
@@ -335,7 +336,7 @@ along with newly accepted vocabulary. Not added, and reported as `conflicts`:
 
 | Behavior | Detail |
 |---|---|
-| New rule | Gets the next `R-nnn`, `status: approved`, and `approved: { by, at, hash }` where the hash is computed against the approved vocabulary plus the pending vocabulary |
+| New rule | Gets the next `R-nnn` (and the file's `lastRuleId` is set to it), `status: approved`, and `approved: { by, at, hash }` where the hash is computed against the approved vocabulary plus the pending vocabulary |
 | Existing rule id | Restamps `approved` with a fresh hash (this is how an `unapproved-edit` is accepted), clears `muted` |
 | Vocabulary | `'all'` moves all pending vocabulary into the file. Specific keys move only the entries the approved rules use, transitively. The rest stay pending. Every moved entry is stamped `approved: { by, at, hash: hashVocabulary(entry) }` |
 | `vocabulary:<id>` key | Restamps that approved vocabulary entry (how an edited entry is accepted). Reported as `vocabulary:<id> re-approved` |
