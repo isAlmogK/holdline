@@ -18,7 +18,14 @@ async function analyzeCached(ctx: AnalyzerContext, file: string): Promise<Analyz
   const key = JSON.stringify({ file, recognizers: ctx.recognizers }) + '\0' + content
   const hit = await ctx.cache.get<AnalyzerOutput>(ANALYZER_NAME, ANALYZER_VERSION, key)
   if (hit) return hit
-  const out = analyzeRulesFile(file, content, ctx.recognizers)
+  let out: AnalyzerOutput
+  try {
+    out = analyzeRulesFile(file, content, ctx.recognizers)
+  } catch (e) {
+    // One file's crash (e.g. a stack overflow on deep nesting) must not discard other files' facts. Not cached.
+    const message = `analysis failed: ${e instanceof Error ? e.message : String(e)}`
+    return { diagnostics: [{ analyzer: ANALYZER_NAME, file, severity: 'error', message }] }
+  }
   await ctx.cache.set(ANALYZER_NAME, ANALYZER_VERSION, key, out)
   return out
 }

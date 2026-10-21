@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { scan } from '@holdline/core'
 import { analyzeRulesFile } from '../src/analyze-file.js'
 import { firestoreAnalyzer } from '../src/analyzer.js'
@@ -120,5 +120,20 @@ describe('facts validity', () => {
     const r = await repo({ 'firestore.rules': 'service cloud.firestore { match /databases/{d}/documents { match /a/{id} { allow read: if resource.data.n < 1.0e999; } } }' })
     const { facts } = await scan(r.root, [firestoreAnalyzer])
     expect(facts.policies.map(p => p.condition)).toEqual([{ opaque: 'resource.data.n < 1.0e999' }, { opaque: 'resource.data.n < 1.0e999' }])
+  })
+})
+
+describe('per-file analysis failure', () => {
+  it('turns one file\'s crash into an error diagnostic, keeps other files\' facts and does not cache the failure', async () => {
+    const deep = `service firebase.storage { match /b/{bucket}/o { match /a/{id} { allow read: if ${'('.repeat(50000)}true${')'.repeat(50000)}; } } }`
+    const r = await repo({ 'firestore.rules': RULES, 'storage.rules': deep })
+    const { FileCache } = await import('@holdline/core')
+    const cache = new FileCache(r.root)
+    const set = vi.spyOn(cache, 'set')
+    const out = await firestoreAnalyzer.analyze({ root: r.root, files: r.files, cache, config: {}, recognizers: [] })
+    expect(out.policies).toHaveLength(3)
+    expect(out.diagnostics).toEqual([{ analyzer: 'firestore', file: 'storage.rules', severity: 'error', message: expect.stringMatching(/^analysis failed: /) }])
+    expect(set).toHaveBeenCalledTimes(1)
+    expect(set.mock.calls[0]![2]).toContain('firestore.rules')
   })
 })
