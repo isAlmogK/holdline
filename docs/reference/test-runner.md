@@ -20,7 +20,7 @@ holdline test [--rule <ids...>] [--store postgres|firestore|storage] [--format h
 | `--rule <ids...>` | Only these rules. An id not in `holdline.rules` is a usage error (`no rule <id>`) |
 | `--store <store>` | Only rules whose target is in this store (`postgres`, `firestore` or `storage`). Applied before any file is generated |
 | `--format <format>` | `human` (default) or `json` |
-| `--facts <file>` | The facts used when a test file is generated. Without it, generating a file scans the project (as `holdline scan` does, which also updates `.holdline/cache/facts.json`). Facts are loaded at most once per run, and only when a file is generated |
+| `--facts <file>` | The facts used when a test file is generated. Without it, generating a file scans the project (as `holdline scan` does, which also updates `.holdline/cache/facts.json`). Facts are loaded at most once per run, and only when a file is generated: a missing or malformed facts file is detected only then, and a run whose files are all current never reads it |
 | `--regenerate` | Regenerate every selected test file from the current facts, even when its `generatedFrom` hash is current |
 
 ## Which rules run
@@ -46,7 +46,7 @@ A selected rule's file is (re)generated, deterministically, before it runs when:
 |---|---|
 | The file does not exist | `generated: no test file` |
 | Its `rule` is another id, or its `generatedFrom` differs from the rule's current `hashRule` | `regenerated: the rule changed` |
-| `--regenerate` is given | `regenerated: the rule changed` when the new text differs; no label when it is the same |
+| `--regenerate` is given and the hash is current | `regenerated: --regenerate (the facts changed)` when the new text differs; no label when it is the same |
 
 A regeneration whose text equals the existing file does not write it and is not labeled. `invariant` and
 `data-access` rules are generated with facts (`generateTests(rule, vocab, facts)`): invariant cases need the table or
@@ -61,7 +61,7 @@ and the vocabulary, so a file reflects the facts it was generated with: after ch
 |---|---|
 | 0 | Every case passed (notes and skip reasons allowed) |
 | 1 | A case failed |
-| 2 | Usage or config error: unknown option value (`--format`, `--store`), unknown `--rule` id, a test file that does not parse, a missing `--facts` file, a malformed `holdline.rules` or `.holdline/config.yaml`, more than one file matching the `rules` globs of the config's `firestore` or `storage` section |
+| 2 | Usage or config error: unknown option value (`--format`, `--store`), unknown `--rule` id, a test file that does not parse, a missing or malformed `--facts` file (when a file must be generated), a malformed `holdline.rules` or `.holdline/config.yaml`, more than one file matching the `rules` globs of the config's `firestore` or `storage` section |
 | 3 | A runner could not run (see Infrastructure failures), or an internal error. Exit 3 wins over failed cases |
 
 ## Report
@@ -72,7 +72,7 @@ Human format:
 
 ```
 R-001 postgres: 3 passed
-R-002 firestore: 2 passed, 1 failed (regenerated: the rule changed)
+R-002 firestore: 2 passed, 1 failed (regenerated: --regenerate (the facts changed))
   ✗ create: allowed when every condition holds: expected allow, got deny: Property status is undefined on object
   - skipped: list: needs query filters to test; read cases cover the condition
 R-007: no cases
@@ -83,7 +83,7 @@ allow cases are built from the facts when the file was generated; after changing
 Could not run:
   storage: Java is not installed: install firebase-tools ...
 
-5 passed, 1 failed in 3 rules
+5 passed, 1 failed in 3 rules (1 rule has no runnable cases)
 ```
 
 | Line | Shown when |
@@ -92,30 +92,31 @@ Could not run:
 | `✗ <case>: <detail>` | Each failed case. Multi-line database or emulator messages are indented under it |
 | `- skipped: <reason>` | Each of the file's `skipped` reasons, and each note |
 | The `--regenerate` hint | Some `allow` case got `deny` (often a file generated against older policies) |
-| `Could not run:` | Infrastructure failures, one line per store |
-| Summary | Always: passed and failed cases, and the number of reported rules (notes included) |
+| `Could not run:` | Infrastructure failures, one line per failure (a store can have more than one) |
+| Summary | Always: passed and failed cases, and the number of reported rules (notes included). When some reported rules ran no case (notes, or files whose cases were all skipped), `(N rule(s) has/have no runnable cases)` follows |
 
 JSON format (`--format json`):
 
 ```json
 {
   "files": [
-    { "rule": "R-002", "store": "firestore", "generated": "changed",
+    { "rule": "R-002", "store": "firestore", "generated": "refreshed",
       "cases": [{ "name": "...", "expect": "allow", "actual": "deny", "passed": false, "detail": "expected allow, got deny: ..." }],
       "skipped": ["..."] }
   ],
   "infrastructure": [{ "store": "storage", "message": "..." }],
-  "summary": { "passed": 5, "failed": 1, "rules": 3 }
+  "summary": { "passed": 5, "failed": 1, "rules": 3, "noCases": 1 }
 }
 ```
 
 | Field | Notes |
 |---|---|
 | `files[].store` | Left out only for a note on a rule without a data target (an `access` rule named with `--rule`) |
-| `files[].generated` | `missing` or `changed`, only when the file was written in this run |
+| `files[].generated` | `missing`, `changed` (the rule's hash differed) or `refreshed` (`--regenerate` with a current hash), only when the file was written in this run |
 | `cases[].actual` | `allow`, `deny`, `reject` or `error`. `error` always fails the case: the database or emulator did something other than allow or refuse (a seed failed, an unknown column, an ambiguous refusal) |
 | `cases[].detail` | Only on failed cases |
 | `infrastructure` | Stores that could not run. Their files are left out of `files`: their cases did not pass or fail |
+| `summary.noCases` | Reported rules with no case that ran (notes and files whose cases were all skipped); counted in `summary.rules` |
 
 ## Infrastructure failures
 
@@ -191,7 +192,7 @@ Operations (data-access cases):
 | `update` with no data | Writes the record's own value to one column (the first non-key column it has) |
 | Several seed rows of the table | A refused `update` or `delete` (an error code) is `error`: the runner cannot tell which row the policy refused |
 | No seed row of `do.path` (`read`, `list`, `update`, `delete`) | `error` (`no seed row of <table> to <op>`) |
-| Table without a primary key | `error` |
+| Table without a primary key | `error` for `read`, `list`, `update` and `delete` (the record is found by its key); `create` needs no key |
 | `reject` | `create` and `update` only: the statement fails with `23502` (not null), `23503` (foreign key), `23505` (unique), `23514` (check) or `22P02` (invalid input, an enum label). The case format has no code field, so any of the five passes a `reject` case |
 | Any other failure | `error` |
 
@@ -259,11 +260,17 @@ Storage files never run without Storage rules: both are infrastructure failures.
 | Situation | What runs |
 |---|---|
 | `FIRESTORE_EMULATOR_HOST` is set (and `FIREBASE_STORAGE_EMULATOR_HOST` when Storage files run) | The cases run in process against those emulators |
-| Otherwise | `firebase emulators:exec --only firestore,storage --project holdline-test` in a temp directory, with a generated `firebase.json` (free ports, UI off, the project's rules or deny-all rules for a store with none). The command it runs is a worker (`node --import tsx firebase-worker.ts in.json out.json`) that runs the cases and writes the results to a file. The run times out after 180 s; the whole process group is stopped |
+| Otherwise | `firebase emulators:exec --only firestore,storage --project holdline-test` in a temp directory, with a generated `firebase.json` (free ports, UI off, the project's rules or deny-all rules for a store with none). The command it runs is a worker (`node --import tsx firebase-worker.ts in.json out.json`, each word single-quoted for the shell `emulators:exec` runs it through) that runs the cases and writes the results to a file. The run times out after 180 s; the whole process group is stopped |
 | `firebase` or `java` is not on `PATH` | Infrastructure failure with the hint |
 
 firebase-tools 15 needs Java 21 or later. With an older JDK the emulator does not start: `holdline test` exits 3 with
 the emulator's output and the hint.
+
+On its first run, firebase-tools may download the emulator JARs into its own cache. That is firebase-tools' doing:
+Holdline's own code only talks to the emulators on `127.0.0.1`.
+
+`@firebase/rules-unit-testing` 6 and the `@firebase/*` packages of `firebase` 13 declare Node 24.12 or later in
+`engines`. The repo and CI run Node 22, where the runner works.
 
 ### Per case
 
@@ -293,9 +300,20 @@ the emulator's output and the hint.
 Custom metadata holds strings only, so Storage seed and request `data` is converted: strings as is, numbers and
 booleans as strings, `null` dropped, other values as JSON text.
 
+## Known limits
+
+- Access cases (`data-access`) run with `session_replication_role = replica` from seeding through the operation (only
+  invariant cases switch back to `origin`), so triggers and foreign keys are off: a trigger that would refuse a write
+  is bypassed, and the case reports what the policies and privileges alone allow.
+- Column types the filler does not know (`time`, `interval`, `bytea`, `inet`, ...) get `'x'`, which fails at run time
+  as `error`, not as a skip.
+
 ## Tests of the runner
 
 `@emulator` suites (`packages/testkit/test/firebase-runner.test.ts`, `packages/cli/test/test-command-firebase.test.ts`)
-need firebase-tools and a JDK the installed firebase-tools accepts. When the emulator cannot run they skip each test
-with the reason and print it once on stderr (`@emulator tests skipped: ...`). The CI workflow installs neither, so
-they skip there. The Postgres suites need nothing beyond `pnpm install`.
+need firebase-tools and a JDK the installed firebase-tools accepts. They skip only when the tools are missing
+(`toolsMissing` in `packages/testkit/src/emulator.ts`: `firebase-tools is not installed`, `Java is not installed`, or an
+emulator that did not start because of the Java version): each test skips with the reason, printed once on stderr
+(`@emulator tests skipped: ...`). Any other infrastructure failure (a timeout, an invalid or missing worker result, an
+emulator that could not be used) fails the suite with its message. The CI workflow installs Temurin Java 21 and
+firebase-tools 15, so they run there. The Postgres suites need nothing beyond `pnpm install`.

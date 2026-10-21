@@ -474,20 +474,22 @@ Postgres (`as: null`; the runner inserts as superuser with foreign keys on):
 
 | Detail | Value |
 |---|---|
-| Valid row | The columns the rule names plus every `NOT NULL` column without a default. Primary-key columns are left to the runner unless the rule names them or they are in a foreign key, so two rows of a `unique` case differ in their key. Foreign-key columns get `<column>-1`, a named `enum` column the rule's first value, any other column the shared filler (`fillerValue`, see the [test runner reference](test-runner.md#values-and-filler)) |
+| Valid row | The columns the rule names plus every `NOT NULL` column without a default; for `unique`, also every column of the other keys (below). Primary-key columns are left to the runner unless the rule names them or they are in a foreign key: the runner gives each row its own key. Foreign-key columns get `<column>-1`, a named `enum` column the rule's first value, any other column the shared filler (`fillerValue`, see the [test runner reference](test-runner.md#values-and-filler)) |
 | Parents | Each foreign key whose columns are all in the row gets a seed row in the referenced table with the referenced columns set to the row's values |
+| Other keys (`unique`) | The primary key and every unique set in the facts (`uniques`) other than the rule's own column set. The seeded duplicate keeps the rule's columns and differs in every other column of these keys: a foreign-key column gets `<column>-2` (and its own parent row), a primary-key column the runner keys is left out, any other column a second filler (`otherFillerValue`: uuid `filler-2`, text `x2`, numbers `2`, boolean `true`, the second enum label or CHECK literal) |
 | Allow case | `create: a complete valid row inserts` |
 | `not-null` | Per column: `create: rejects <column> null`, the valid row with the column `null` |
-| `fk` | `create: rejects <columns> with no matching <table> row`, the columns set to `missing-1`, `missing-2`, ... |
-| `unique` | `create: rejects a second row with the same <columns>`: the valid row is seeded first, then inserted again |
+| `fk` | `create: rejects <columns> with no matching <table> row`, the columns set to `missing-1`, `missing-2`, ... Skipped when another foreign key in the facts covers one of the columns (it would refuse the row without the rule's): `create: cannot isolate fk <columns> (another foreign key covers <columns2>)` |
+| `unique` | `create: rejects a second row with the same <columns>`: the duplicate (Other keys) is seeded, then the valid row is inserted, so only a constraint on the rule's columns can refuse it. Skipped when another key cannot differ (all its other columns have one possible value, such as a single enum label or CHECK literal, or it lies within the rule's columns): `create: cannot isolate unique <columns> (another unique key covers <columns2>)` |
 | `enum` | Per column: `create: rejects <column> '__holdline_invalid__'` |
 | `check` | Skipped: `check expressions are tested statically only` |
 | Table not in the facts | Skipped: `table <table> is not in the facts; run holdline scan, then holdline test --regenerate` |
 
 Every case but the allow case has `expect: reject`.
 
-Firestore (`not-null` and `enum` only): the target's `create` policies in the facts are tried in order. The first
-whose condition is only an `and` of atoms and can be satisfied, with each `enum` column set to the rule's first value
+Firestore (`not-null` and `enum` only): the target's `create` policies in the facts are tried in order, with their path
+params renamed to the target's (`FactIndex.alignedPolicies`). The first whose condition is only an `and` of atoms, reads
+no path param the target lacks and can be satisfied, with each `enum` column set to the rule's first value
 and each `not-null` column set (`present-1` when the policy does not set it), gives the allowed world:
 
 | Case | Name |
