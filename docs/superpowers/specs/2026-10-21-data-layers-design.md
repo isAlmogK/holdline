@@ -401,13 +401,14 @@ describes the code; this list records where it differs from sections 3, 6.1 and 
 | 6.1 Golden app | Twelve rules and breakages, see the [README](../../../examples/golden-supabase/README.md). Beyond the listed rules: projects are created only by members (R-003), organizations are read only by members (R-005), deleted projects are never readable (R-006). "Only admins read invoices" (R-004) uses a custom JWT claim `user_role`, because the `exists` doc format can't hold a literal such as `role = 'admin'`. It covers only the admin claim, not the policy's organization membership half. In a real app the claim would come from a custom access-token hook. The Next.js files are never built (no `tsconfig`). |
 | 8 Tracks | `applyMigrations(root, config, files?)` returns `MigrationRun { db, dialect, migrations, failure? }`; the caller closes `db`. `files` defaults to `listFiles(root)`. |
 | 9 Testing | Soundness runs each normalization against real Postgres in `test/soundness.test.ts`. `golden-ts-postgres` tables, locations included, come from its migration and match `fixtures/facts.json`. |
-| Shared files | Outside this track's folders: the root `package.json` `typecheck` script also checks `packages/analyzer-postgres`; `packages/cli/package.json` depends on `@holdline/analyzer-postgres`; `packages/cli/test/golden-patch.test.ts` gives each golden-app test 120 s. Plus the one import and array entry in `packages/cli/src/analyzers.ts`. |
+| Shared files | Outside this track's folders: the root `package.json` `typecheck` script also checks `packages/analyzer-postgres`; `packages/cli/package.json` depends on `@holdline/analyzer-postgres`; `packages/cli/test/golden-patch.test.ts` gives each golden-app test 120 s; the root `vitest.config.ts` has two projects, core's tests first (`sequence.groupOrder` 0) and every other package's after (1). Plus the one import and array entry in `packages/cli/src/analyzers.ts`. |
 
 **Known limits:** each partition is also emitted as a table; a generated column's expression appears as its default;
 unique constraints and indexes are not merged by column position; `NO INHERIT` stays in a check's `expr`; integers
 above 2^53 lose precision and `float4` rounding is not modelled; a signed-in wrap plus a restriction can repeat
 `authenticated` in nested `and`s.
 
-**Flaky core test:** under the CPU load of the PGlite suites, the model-based prover property test in
-`packages/core/test/logic.test.ts` can exceed its 5 s timeout in a full `pnpm test` run. It passes alone. It needs a
-longer timeout in a core change.
+**Test order:** core's property tests (`packages/core/test/logic.test.ts`) have 5 s timeouts that the CPU load
+of the PGlite suites could push past when everything ran at once. The root `vitest.config.ts` therefore runs core's
+tests as their own project before the other packages' (`sequence.groupOrder`). Every test file still runs exactly once,
+and the total time is unchanged.
