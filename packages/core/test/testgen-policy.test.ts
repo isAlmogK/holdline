@@ -99,13 +99,61 @@ describe('generateTests satisfies the op policy from the facts', () => {
     ))).toEqual(f)
   })
 
-  it('applies the per-op skips to the policy atoms too', () => {
-    // A read policy that reads the incoming write cannot be tested on read: the op is skipped, not guessed.
-    const r = rule({ type: 'data-access', target: { store: 'firestore', path: projects }, ops: ['read'],
-      requires: and(authenticated, { op: 'eq', left: 'resource.ownerId', right: 'actor.uid' }) })
-    const f = generateTests(r, vocab, fsFacts(fsPolicy(1, and(authenticated, { op: 'eq', left: 'resource.ownerId', right: 'actor.uid' }, statusIn(['a'])), ['read'])))!
-    expect(f.cases).toEqual([])
-    expect(f.skipped).toEqual(['read: the condition reads the incoming write, which read does not send'])
+  it('passes over a candidate whose extras would skip an op the rule alone can test', () => {
+    // A read policy that reads the incoming write cannot be tested on read, so the op uses the rule atoms alone.
+    const owner: Atom = { op: 'eq', left: 'resource.ownerId', right: 'actor.uid' }
+    const r = rule({ type: 'data-access', target: { store: 'firestore', path: projects }, ops: ['read'], requires: and(authenticated, owner) })
+    expect(generateTests(r, vocab, fsFacts(fsPolicy(1, and(authenticated, owner, statusIn(['a'])), ['read'])))).toEqual(generateTests(r, vocab))
+  })
+
+  it('uses the next candidate when the first would skip list', () => {
+    const member: Atom = { op: 'exists', doc: '/members/{actor.uid}' }
+    const tier: Atom = { op: 'eq', left: 'actor.claim.tier', right: { literal: 'pro' } }
+    const deleted: Atom = { op: 'isNull', operand: 'resource.deletedAt' }
+    const r = rule({ type: 'data-access', target: { store: 'firestore', path: projects }, ops: ['read', 'list'], requires: and(member) })
+    const onlyDeleted = fsFacts(fsPolicy(1, and(member, deleted), ['read', 'list']))
+    const withList = generateTests(r, vocab, onlyDeleted)!
+    const today = generateTests(r, vocab)!
+    expect(withList.cases.filter(c => c.do.op === 'list')).toEqual(today.cases.filter(c => c.do.op === 'list'))
+    expect(withList.skipped).toEqual([])
+    expect(withList.cases[0]!.seed[0]).toEqual({ path: '/projects/projectId-1', data: { deletedAt: null } })
+    const f = generateTests(r, vocab, fsFacts(fsPolicy(1, and(member, deleted), ['read', 'list']), fsPolicy(2, and(member, tier), ['list'])))!
+    const list = f.cases.filter(c => c.do.op === 'list')
+    expect(list.map(c => c.name)).toEqual(['list: allowed when every condition holds', `list: denied without ${formatAtom(member)}`])
+    for (const c of list) expect(c.as).toEqual({ uid: 'user-1', claims: { tier: 'pro' } })
+  })
+
+  it('treats another form of a rule atom as the rule atom', () => {
+    const owner: Atom = { op: 'eq', left: 'resource.ownerId', right: 'actor.uid' }
+    const r = rule({ type: 'data-access', target: { store: 'firestore', path: projects }, ops: ['read'], requires: and(owner) })
+    const f = generateTests(r, vocab, fsFacts(fsPolicy(1, and({ op: 'eq', left: 'actor.uid', right: 'resource.ownerId' }), ['read'])))!
+    expect(f).toEqual(generateTests(r, vocab))
+    expect(f.cases.map(c => c.name)).toContain('read: denied without resource.ownerId == actor.uid')
+  })
+})
+
+describe('generateTests aligns policy path params to the rule target', () => {
+  const target = '/orgs/{org}/projects/{id}'
+  const member = (param: string): Atom => ({ op: 'exists', doc: `/orgs/{param.${param}}/members/{actor.uid}` })
+  const policyOn = (path: string, condition: Expr) => parseFacts({ version: 1, policies: [
+    { id: `firestore:${path}#read@1`, store: 'firestore', target: path, ops: ['read'], condition },
+  ] })
+
+  it('renames the policy params before satisfying it', () => {
+    const r = rule({ type: 'data-access', target: { store: 'firestore', path: target }, ops: ['read'], requires: and(authenticated) })
+    const f = generateTests(r, vocab, policyOn('/orgs/{orgId}/projects/{projectId}', and(authenticated, member('orgId'))))!
+    expect(f.cases[0]!.do.path).toBe('/orgs/org-1/projects/id-1')
+    expect(f.cases[0]!.seed).toEqual([
+      { path: '/orgs/org-1/projects/id-1', data: {} },
+      { path: '/orgs/org-1/members/user-1', data: {} },
+    ])
+    expect(f.cases.map(c => c.name)).toEqual(['read: allowed when every condition holds', `read: denied without ${formatAtom(authenticated)}`])
+  })
+
+  it('passes over a policy that reads a path param the rule target does not have', () => {
+    const r = rule({ type: 'data-access', target: { store: 'firestore', path: '/orgs/acme/projects/{id}' }, ops: ['read'], requires: and(authenticated) })
+    expect(generateTests(r, vocab, policyOn('/orgs/{orgId}/projects/{projectId}', and(authenticated, member('orgId')))))
+      .toEqual(generateTests(r, vocab))
   })
 })
 

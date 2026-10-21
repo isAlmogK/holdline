@@ -1,7 +1,6 @@
 import type { Expr } from '../expr.js'
 import { formatExpr } from '../format.js'
-import { implies, renameParams } from '../logic.js'
-import { alignParams } from '../paths.js'
+import { implies } from '../logic.js'
 import type { DataAccessRule, ProposedRule } from '../rules.js'
 import { describeTarget } from '../results.js'
 import type { CheckContext, CheckOutcome, Violation } from './types.js'
@@ -25,10 +24,7 @@ export function checkDataAccess(rule: DataAccess, { index, vocab }: CheckContext
     return { stale: `nothing matches ${name}` }
   }
   const violations = rule.ops.flatMap((op): Violation[] => {
-    const conditions = index.policies(t, op).map(p => ({
-      policy: p,
-      condition: t.store === 'postgres' ? p.condition : renameParams(p.condition, alignParams(p.target, t.path), { fresh: true }),
-    }))
+    const conditions = index.alignedPolicies(t, op)
     const result = implies({ or: conditions.map(c => c.condition) } satisfies Expr, rule.requires, vocab)
     if (result.ok) return []
     const culprit = conditions.find(c => !implies(c.condition, rule.requires, vocab).ok)

@@ -420,9 +420,17 @@ Atoms are satisfied in three stages: plain atoms, then atoms with a lookup opera
 
 With facts (`generateTests(rule, vocab, facts)`), each op's allowed world also satisfies the store's real policy for
 that op, which can need more than the rule names (a create rule that also checks `status`, a select policy with
-`deleted_at is null`). The candidates are the target's policies for the op, in facts order. The first one that is only
-an `and` of atoms (after expanding the vocabulary) and that one world can satisfy together with the rule adds its
-other atoms to that op's atoms. With no such policy, or no facts, the op uses the rule's atoms alone. Deny cases are
+`deleted_at is null`). The candidates are the target's policies for the op, in facts order, with Firestore and Storage
+path params renamed to the rule target's (as the static check does). The first candidate that meets all of these adds
+its other atoms to that op's atoms:
+
+- it is only an `and` of atoms after expanding the vocabulary;
+- it reads no path param the target lacks;
+- one world can satisfy it together with the rule;
+- it adds no per-op skip that the rule's atoms alone would not cause.
+
+An atom equivalent to a rule atom (`a == b` and `b == a`) is the rule atom, not an extra one. With no such policy, or
+no facts, the op uses the rule's atoms alone. Deny cases are
 still one per rule atom, with the same names; the policy's extra atoms hold in every deny world. The per-op skips
 below look at the extra atoms too. `generatedFrom` hashes only the rule and vocabulary, so a test file reflects the
 facts it was generated with.
