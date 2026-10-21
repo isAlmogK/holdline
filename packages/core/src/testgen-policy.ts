@@ -4,7 +4,7 @@ import { FactIndex } from './fact-index.js'
 import type { Facts, Op } from './facts.js'
 import { andAtoms, atomImplies, expand, type Vocabulary } from './logic.js'
 import { parsePattern } from './paths.js'
-import type { DataAccessRule } from './rules.js'
+import type { DataAccessRule, DataTarget } from './rules.js'
 import { holds } from './testgen-eval.js'
 import { satisfy } from './testgen-satisfy.js'
 import { opSkip } from './testgen-skip.js'
@@ -20,10 +20,9 @@ export function policyAtoms(rule: DataAccessRule, op: Op, ruleAtoms: Atom[], voc
   const alone = solveFor(ruleAtoms, rule, op)
   // When the rule's own atoms cannot be tested on this op, it is skipped either way: keep that reason.
   if (!alone || opSkip(op, ruleAtoms, alone)) return []
-  const params = targetParams(rule)
   for (const { condition } of new FactIndex(facts).alignedPolicies(rule.target, op)) {
     const atoms = andAtoms(expand(condition, vocab))
-    if (!atoms || atoms.some(a => paramsOf(a).some(p => !params.has(p)))) continue
+    if (!atoms || readsMissingParam(atoms, rule.target)) continue
     const extras = atoms.filter((a, i) =>
       !ruleAtoms.some(b => equivalent(a, b)) && atoms.findIndex(b => equivalent(a, b)) === i)
     const all = [...ruleAtoms, ...extras]
@@ -36,9 +35,16 @@ export function policyAtoms(rule: DataAccessRule, op: Op, ruleAtoms: Atom[], voc
 // Two forms of one condition (`a == b` and `b == a`) count as the same atom.
 const equivalent = (a: Atom, b: Atom) => atomImplies(a, b) && atomImplies(b, a)
 
-function targetParams(rule: DataAccessRule): Set<string> {
-  if (rule.target.store === 'postgres') return new Set()
-  return new Set(parsePattern(rule.target.path).flatMap(s => (s.kind === 'literal' ? [] : [s.name])))
+// True when an atom reads a path param `target` does not have (an aligned policy's fresh `__p0`, ...): the
+// generator cannot give it the value the store will.
+export function readsMissingParam(atoms: Atom[], target: DataTarget): boolean {
+  const params = targetParams(target)
+  return atoms.some(a => paramsOf(a).some(p => !params.has(p)))
+}
+
+function targetParams(target: DataTarget): Set<string> {
+  if (target.store === 'postgres') return new Set()
+  return new Set(parsePattern(target.path).flatMap(s => (s.kind === 'literal' ? [] : [s.name])))
 }
 
 // The path params an atom reads, as an operand or a `{param.x}` placeholder.

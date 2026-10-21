@@ -217,6 +217,34 @@ describe('firestore invariant tests', () => {
     expect(f.cases.map(c => c.expect)).toEqual(['allow'])
     expect(f.skipped).toEqual(['create: cannot deny only orgId (create policy firestore:/projects/{projectId}#create@9 cannot be evaluated)'])
   })
+  it('renames the policy path params to the target\'s', () => {
+    const member = { and: [
+      { atom: { op: 'exists', doc: '/orgs/{param.projectId}/members/{actor.uid}' } },
+      { atom: { op: 'in', left: 'incoming.status', right: { literal: ['active', 'archived'] } } },
+    ] }
+    const f = generateTests(nn, vocab, parseFacts({ version: 1, policies: [
+      { id: 'firestore:/projects/{projectId}#create@5', store: 'firestore', target: '/projects/{projectId}', ops: ['create'], condition: member },
+    ] }))!
+    // The rule's target names the param `id`: the member document is seeded under the project being created.
+    expect(f.cases.map(c => [c.name, c.do.path, c.seed.map(s => s.path)])).toEqual([
+      ['create: allowed with orgId set', '/projects/id-1', ['/orgs/id-1/members/user-1']],
+      ['create: denied without orgId', '/projects/id-1', ['/orgs/id-1/members/user-1']],
+    ])
+  })
+  it('passes over a policy that reads a path param the target lacks', () => {
+    const r = rule({ type: 'invariant', target: { store: 'firestore', path: '/orgs/acme/projects/{id}' }, kind: 'not-null', columns: ['orgId'] })
+    const f = generateTests(r, vocab, parseFacts({ version: 1, policies: [
+      { id: 'firestore:/orgs/{orgId}/projects/{projectId}#create@5', store: 'firestore', target: '/orgs/{orgId}/projects/{projectId}', ops: ['create'],
+        condition: { atom: { op: 'exists', doc: '/orgs/{param.orgId}/members/{actor.uid}' } } },
+      { id: 'firestore:/orgs/{orgId}/projects/{projectId}#create@9', store: 'firestore', target: '/orgs/{orgId}/projects/{projectId}', ops: ['create'],
+        condition: { atom: { op: 'eq', left: 'actor.claim.admin', right: { literal: true } } } },
+    ] }))!
+    expect(f.cases.map(c => [c.name, c.as, c.seed])).toEqual([
+      ['create: allowed with orgId set', { uid: 'user-1', claims: { admin: true } }, []],
+      ['create: denied without orgId', { uid: 'user-1', claims: { admin: true } }, []],
+    ])
+    expect(f.skipped).toEqual([])
+  })
   it('keeps the deny case when another create policy needs something the denied write lacks', () => {
     const f = generateTests(nn, vocab, withSecond({ and: [{ atom: { op: 'eq', left: 'actor.claim.admin', right: { literal: true } } }] }))!
     expect(f.cases.map(c => c.expect)).toEqual(['allow', 'deny'])
