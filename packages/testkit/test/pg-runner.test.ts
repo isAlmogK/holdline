@@ -18,6 +18,12 @@ create policy read_members on public.projects for select using (
 create policy update_owner on public.projects for update using (owner_id = auth.uid());
 create policy insert_owner on public.projects for insert with check (owner_id = auth.uid());
 create policy delete_owner on public.projects for delete using (owner_id = auth.uid());
+create table public.notes (id bigint generated always as identity primary key, owner_id uuid not null,
+  locked boolean not null default false, body text);
+alter table public.notes enable row level security;
+create policy notes_read on public.notes for select using (owner_id = auth.uid());
+create policy notes_update on public.notes for update using (owner_id = auth.uid()) with check (not locked);
+create policy notes_delete on public.notes for delete using (owner_id = auth.uid());
 `
 
 const actor = { uid: 'user-1', claims: {} }
@@ -83,6 +89,30 @@ describe('runPostgresFile (supabase)', () => {
       tc('delete', { as: actor, seed: [notMine, mine], do: { op: 'delete', path: 'public.projects' }, expect: 'deny' }),
     ]), 'access', 'supabase')
     expect(outcomes(results)).toEqual({ update: 'deny', delete: 'deny' })
+  }, SLOW)
+
+  it('finds a record whose key the database generated', async () => {
+    const note = { path: 'public.notes', data: { owner_id: 'user-1' } }
+    const results = await runPostgresFile(db, file([
+      tc('owner reads', { as: actor, seed: [note], do: { op: 'read', path: 'public.notes' }, expect: 'allow' }),
+      tc('owner updates', { as: actor, seed: [note], do: { op: 'update', path: 'public.notes', data: { body: 'y' } }, expect: 'allow' }),
+      tc('owner deletes', { as: actor, seed: [note], do: { op: 'delete', path: 'public.notes' }, expect: 'allow' }),
+      tc('other deletes', { as: other, seed: [note], do: { op: 'delete', path: 'public.notes' }, expect: 'deny' }),
+    ]), 'access', 'supabase')
+    expect(outcomes(results)).toEqual({ 'owner reads': 'allow', 'owner updates': 'allow', 'owner deletes': 'allow', 'other deletes': 'deny' })
+  }, SLOW)
+
+  it('a refused update with several rows of the table seeded is an error, not a deny', async () => {
+    // The locked row fails the WITH CHECK, though the record itself is updatable: the statement cannot say which.
+    const [r] = await runPostgresFile(db, file([tc('ambiguous', {
+      as: actor,
+      seed: [{ path: 'public.notes', data: { owner_id: 'user-1' } }, { path: 'public.notes', data: { owner_id: 'user-1', locked: true } }],
+      do: { op: 'update', path: 'public.notes', data: { body: 'y' } },
+      expect: 'deny',
+    })]), 'access', 'supabase')
+    expect(r!.actual).toBe('error')
+    expect(r!.passed).toBe(false)
+    expect(r!.detail).toMatch(/cannot tell which public\.notes row the policy rejected \(the case seeds 2 rows of public\.notes\)/)
   }, SLOW)
 
   it('PGlite: RESET ROLE leaves SET LOCAL ROLE, and an identical update moves the ctid', async () => {
@@ -152,6 +182,17 @@ describe('runPostgresFile (supabase)', () => {
       }),
     ]), 'invariant', 'supabase')
     expect(outcomes(results)).toEqual({ valid: 'allow', 'null fk': 'reject', 'missing fk': 'reject', 'bad check': 'reject', duplicate: 'reject' })
+  }, SLOW)
+
+  it('invariant update keeps a WHERE on the record, so other seeded rows do not blur the outcome', async () => {
+    const org = { path: 'public.orgs', data: { id: 'org-1' } }
+    const m = (user_id: string) => ({ path: 'public.memberships', data: { org_id: 'org-1', user_id } })
+    const update = (role: string) => ({ op: 'update' as const, path: 'public.memberships', data: { role } })
+    const results = await runPostgresFile(db, file([
+      tc('valid', { as: null, seed: [org, m('u'), m('v')], do: update('admin'), expect: 'allow' }),
+      tc('bad check', { as: null, seed: [org, m('u'), m('v')], do: update('bogus'), expect: 'reject' }),
+    ]), 'invariant', 'supabase')
+    expect(outcomes(results)).toEqual({ valid: 'allow', 'bad check': 'reject' })
   }, SLOW)
 
   it('a seed with an unknown column is an error, not a pass', async () => {

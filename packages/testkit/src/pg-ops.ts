@@ -17,17 +17,22 @@ export function describeError(e: unknown): string {
   return err?.code ? `${message} (${err.code})` : message
 }
 
-export async function insert(tx: Queryable, table: PgTable, row: Row): Promise<void> {
+// With `returning` (superuser seeds only: RETURNING would bring in SELECT policies), gives back the key the
+// database stored, so a key it generated (identity, default) is known.
+export async function insert(tx: Queryable, table: PgTable, row: Row, returning = false): Promise<Row> {
   const cols = Object.keys(row)
-  if (cols.length === 0) return void (await tx.query(`insert into ${table.sql} default values`))
+  const back = returning && table.primaryKey.length > 0 ? ` returning ${table.primaryKey.map(quoteIdent).join(', ')}` : ''
   const params = cols.map((_, i) => `$${i + 1}`).join(', ')
-  await tx.query(`insert into ${table.sql} (${cols.map(quoteIdent).join(', ')}) values (${params})`, cols.map(c => row[c]))
+  const sql = cols.length === 0
+    ? `insert into ${table.sql} default values${back}`
+    : `insert into ${table.sql} (${cols.map(quoteIdent).join(', ')}) values (${params})${back}`
+  return (await tx.query<Row>(sql, cols.map(c => row[c]))).rows[0] ?? {}
 }
 
-function wherePk(table: PgTable, row: Row): { sql: string; params: unknown[] } {
+function wherePk(table: PgTable, row: Row, offset = 0): { sql: string; params: unknown[] } {
   if (table.primaryKey.length === 0) throw new Error(`table ${table.path} has no primary key`)
   return {
-    sql: table.primaryKey.map((c, i) => `${quoteIdent(c)} = $${i + 1}`).join(' and '),
+    sql: table.primaryKey.map((c, i) => `${quoteIdent(c)} = $${offset + i + 1}`).join(' and '),
     params: table.primaryKey.map(c => row[c]),
   }
 }
@@ -55,8 +60,15 @@ async function attempt(run: () => Promise<Outcome>, canReject: boolean): Promise
   }
 }
 
-// `act` switches to the case's actor; until then the transaction runs as superuser.
-export async function operate(tx: Queryable, op: TestCase['do']['op'], table: PgTable, row: Row, records: Seeded[], act: () => Promise<void>): Promise<Run> {
+// A no-WHERE statement refused by RLS or a constraint may have been refused for another seeded row.
+function unambiguous(table: PgTable, records: Seeded[], scoped: boolean, run: Run): Run {
+  if (scoped || records.length < 2 || !run.error || run.actual === 'error') return run
+  return { actual: 'error', error: `cannot tell which ${table.path} row the policy rejected (the case seeds ${records.length} rows of ${table.path})` }
+}
+
+// `act` switches to the case's actor; until then the transaction runs as superuser. `scoped` (invariant cases,
+// superuser, no RLS) keeps a WHERE on the record's key for update and delete.
+export async function operate(tx: Queryable, op: TestCase['do']['op'], table: PgTable, row: Row, records: Seeded[], act: () => Promise<void>, scoped: boolean): Promise<Run> {
   if (op === 'create') {
     await act()
     return attempt(async () => (await insert(tx, table, row), 'allow'), true)
@@ -65,38 +77,39 @@ export async function operate(tx: Queryable, op: TestCase['do']['op'], table: Pg
   if (!record) return { actual: 'error', error: `no seed row of ${table.path} to ${op}` }
   const pk = wherePk(table, record)
   const ctid = async () => (await tx.query<{ c: string }>(`select ctid::text as c from ${table.sql} where ${pk.sql}`, pk.params)).rows[0]?.c
+  // As superuser, before acting: a record its key cannot find would make every op below meaningless.
+  const before = await ctid()
+  if (before === undefined) return { actual: 'error', error: `record row of ${table.path} not found by its key` }
+  await act()
   // UPDATE and DELETE run with no WHERE and no column reads: Postgres applies SELECT policies to them only when
   // the statement reads columns, and a data-access rule is per op. The record's fate is checked afterwards as
   // superuser (RESET ROLE): a new ctid means it was updated, a missing row means it was deleted.
   switch (op) {
     case 'read':
-      await act()
       return attempt(async () => ((await tx.query(`select 1 from ${table.sql} where ${pk.sql}`, pk.params)).rows.length > 0 ? 'allow' : 'deny'), false)
     case 'list':
-      await act()
       return attempt(async () => {
         const pkCols = table.primaryKey.map(quoteIdent).join(', ')
         const seen = new Set((await tx.query<Row>(`select ${pkCols} from ${table.sql}`)).rows.map(r => keyOf(table, r)))
         return records.some(s => seen.has(keyOf(table, s.row))) ? 'allow' : 'deny'
       }, false)
     case 'update': {
-      const before = await ctid()
       const data = Object.keys(row).length > 0 ? row : touch(table, record)
       const cols = Object.keys(data)
       const set = cols.map((c, i) => `${quoteIdent(c)} = $${i + 1}`).join(', ')
-      await act()
-      return attempt(async () => {
-        await tx.query(`update ${table.sql} set ${set}`, cols.map(c => data[c]))
+      const where = wherePk(table, record, cols.length)
+      const sql = `update ${table.sql} set ${set}${scoped ? ` where ${where.sql}` : ''}`
+      return unambiguous(table, records, scoped, await attempt(async () => {
+        await tx.query(sql, [...cols.map(c => data[c]), ...(scoped ? where.params : [])])
         await tx.query('reset role')
         return (await ctid()) !== before ? 'allow' : 'deny'
-      }, true)
+      }, true))
     }
     case 'delete':
-      await act()
-      return attempt(async () => {
-        await tx.query(`delete from ${table.sql}`)
+      return unambiguous(table, records, scoped, await attempt(async () => {
+        await tx.query(`delete from ${table.sql}${scoped ? ` where ${pk.sql}` : ''}`, scoped ? pk.params : [])
         await tx.query('reset role')
         return (await ctid()) === undefined ? 'allow' : 'deny'
-      }, false)
+      }, false))
   }
 }

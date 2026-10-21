@@ -20,8 +20,8 @@ async function steps(tx: Queryable, c: TestCase, kind: CaseKind, dialect: Dialec
     try {
       const table = await tables(tx, seed.path)
       const row = completeRow(table, seed.data, i, uuids)
-      await insert(tx, table, row)
-      seeded.push({ table, row })
+      const key = await insert(tx, table, row, true)
+      seeded.push({ table, row: { ...row, ...key } })
     } catch (e) {
       return { actual: 'error', error: `seed ${seed.path} failed: ${describeError(e)}` }
     }
@@ -33,7 +33,7 @@ async function steps(tx: Queryable, c: TestCase, kind: CaseKind, dialect: Dialec
     if (kind === 'invariant') await tx.query('set local session_replication_role = origin')
     else await actAs(tx, dialect, c.as, uuids)
   }
-  return operate(tx, c.do.op, table, row, seeded.filter(s => s.table.path === table.path), act)
+  return operate(tx, c.do.op, table, row, seeded.filter(s => s.table.path === table.path), act, kind === 'invariant')
 }
 
 async function runCase(db: PGlite, c: TestCase, kind: CaseKind, dialect: Dialect, tables: Tables): Promise<Run> {
