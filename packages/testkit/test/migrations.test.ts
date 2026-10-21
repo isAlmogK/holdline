@@ -1,20 +1,6 @@
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { applyMigrations } from '../src/migrations.js'
-
-async function project(files: Record<string, string>): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'holdline-tk-'))
-  for (const [p, c] of Object.entries(files)) {
-    await mkdir(join(root, p, '..'), { recursive: true })
-    await writeFile(join(root, p), c)
-  }
-  return root
-}
-
-// PGlite boots a WASM Postgres per test; allow for parallel-suite load.
-const SLOW = 30_000
+import { project, SLOW } from './helpers.js'
 
 describe('applyMigrations', () => {
   it('applies supabase migrations in path order on top of the auth shim', async () => {
