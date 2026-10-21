@@ -84,6 +84,13 @@ describe('holdline check', () => {
     const badFacts = await makeProject({ 'holdline.rules': rulesFile(auth), 'facts.json': '{"version":9}' })
     expect((await runCli(['check', '--facts', 'facts.json'], { cwd: badFacts })).code).toBe(2)
   })
+  it('exits 2 when --rule names a rule that is not in holdline.rules', async () => {
+    const root = await makeProject({ 'holdline.rules': rulesFile(auth), 'facts.json': facts })
+    const out = await runCli(['check', '--facts', 'facts.json', '--rule', 'R-404'], { cwd: root })
+    expect(out.code).toBe(2)
+    expect(out.stderr).toContain('no rule R-404')
+    expect((await runCli(['check', '--facts', 'facts.json', '--rule', 'R-001'], { cwd: root })).code).toBe(0)
+  })
   it('exits 2 on an unknown command', async () => {
     const root = await makeProject({})
     expect((await runCli(['frobnicate'], { cwd: root })).code).toBe(2)

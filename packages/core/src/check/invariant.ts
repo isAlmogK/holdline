@@ -22,7 +22,6 @@ function wrapped(s: string): boolean {
   }
   return false
 }
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 export function checkInvariant(rule: Invariant, ctx: CheckContext): CheckOutcome {
   return rule.target.store === 'postgres' ? checkTable(rule, rule.target.table, ctx) : checkDocs(rule, ctx)
@@ -55,9 +54,8 @@ function checkTable(rule: Invariant, tableName: string, { index }: CheckContext)
       return found ? { violations: [] } : fail(`${table.name}(${cols}) is not unique`, `ALTER TABLE ${table.name} ADD UNIQUE (${cols});`)
     }
     case 'check': {
-      const found = table.checks.some(c => rule.expr
-        ? normalizeSql(c.expr) === normalizeSql(rule.expr)
-        : rule.columns.every(col => new RegExp(`\\b${escapeRe(col)}\\b`).test(c.expr)))
+      const expr = rule.expr
+      const found = expr !== undefined && table.checks.some(c => normalizeSql(c.expr) === normalizeSql(expr))
       return found ? { violations: [] }
         : fail(`${table.name} has no CHECK ${rule.expr ? `(${rule.expr})` : `on ${cols}`}`, `ALTER TABLE ${table.name} ADD CHECK (${rule.expr ?? '…'});`)
     }

@@ -138,6 +138,12 @@ describe('invariant', () => {
     ]
     expect(run({ tables: [broken] }, file(rules)).map(r => r.status)).toEqual(['violation', 'violation', 'violation', 'violation', 'violation'])
   })
+  it('check compares expr only: a check that merely mentions the column does not count', () => {
+    const r = run({ tables: [{ ...table, checks: [{ expr: '(weight < 1000)' }] }] }, file([inv({ kind: 'check', columns: ['weight'], expr: 'weight > 0' })]))
+    expect(r[0]!.status).toBe('violation')
+    const noExpr = run({ tables: [table] }, file([inv({ kind: 'check', columns: ['weight'] })]))
+    expect(noExpr[0]!.status).toBe('violation')
+  })
   it('ignores repeated outer parentheses in check expressions', () => {
     const r = run({ tables: [{ ...table, checks: [{ expr: '((weight > 0))' }] }] }, file([inv({ kind: 'check', columns: ['weight'], expr: 'weight > 0' })]))
     expect(r[0]!.status).toBe('pass')

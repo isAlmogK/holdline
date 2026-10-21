@@ -176,10 +176,10 @@ Policies are matched by store (`pg-rls`, `firestore`, `storage`), target, and `o
 | `columns` | All kinds, at least one |
 | `references` | `fk`, required: `{ table, columns }` |
 | `values` | `enum`, required, at least one |
-| `expr` | `check`, optional SQL text |
+| `expr` | `check`, required: SQL text |
 
 Semantic validation (`validateRuleSemantics`, run by `parseRulesFile` and when proposing): `fk` needs `references`;
-`enum` needs `values`; `fk`, `unique` and `check` apply to postgres targets only.
+`enum` needs `values`; `check` needs `expr`; `fk`, `unique` and `check` apply to postgres targets only.
 
 Postgres checks:
 
@@ -188,7 +188,7 @@ Postgres checks:
 | `not-null` | Every column exists and is not nullable (a missing column is a violation) |
 | `fk` | A foreign key with exactly these columns in this order, referencing this table (normalized) and these columns in order |
 | `unique` | The primary key or one unique constraint has exactly this set of columns (order ignored) |
-| `check` | With `expr`: some check equals it after lowercasing, collapsing whitespace and stripping outer parentheses. Without `expr`: some check mentions every column as a whole word |
+| `check` | Some check equals `expr` after lowercasing, collapsing whitespace and stripping outer parentheses. A check that only mentions the columns does not count; a rule without `expr` (only possible when built in code) is a violation |
 | `enum` | Each column has an enum whose value set equals `values` (order ignored) |
 
 Firestore and Storage targets support only `not-null` and `enum`, checked by implication on the write policies:
@@ -212,6 +212,19 @@ parse time and, if constructed in code, reported as a violation ("not supported 
 for a file built in code), does not check `muted` rules but returns each as `{ id, text, by, at, reason }` in
 `mutedRules` (`muted` is their count), and checks the rest. `summarize` counts each rule once under its worst status, ordered
 `pass < violation < stale < unknown < unapproved-edit`.
+
+## `holdline check` and exit codes
+
+`holdline check [--facts <file>] [--format human|agent|json] [--strict] [--rule <ids...>]` runs `runChecks` and prints
+the results. `--rule` limits the run to those rule ids; an id that is not in `holdline.rules` is a usage error
+(`no rule <id>`, exit 2).
+
+| Exit | When |
+|---|---|
+| 0 | No violation and no unapproved edit (stale and unknown results allowed without `--strict`) |
+| 1 | A violation or an unapproved edit; with `--strict`, also a stale or unknown result |
+| 2 | Usage or config error: bad arguments, unknown `--rule` id, malformed `holdline.rules` or facts file |
+| 3 | Internal error |
 
 ## Vocabulary and recognizers
 

@@ -181,6 +181,9 @@ describe('helpers', () => {
   it('validateRuleSemantics checks invariant fields', () => {
     const r = RuleSchema.parse({ id: 'R-001', text: 't', type: 'invariant', target: { store: 'postgres', table: 'x' }, kind: 'enum', columns: ['c'], status: 'pending' })
     expect(validateRuleSemantics(r)).toEqual(['enum needs values'])
+    const check = RuleSchema.parse({ id: 'R-001', text: 't', type: 'invariant', target: { store: 'postgres', table: 'x' }, kind: 'check', columns: ['c'], status: 'approved' })
+    expect(validateRuleSemantics(check)).toEqual(['check needs expr'])
+    expect(validateRuleSemantics(RuleSchema.parse({ ...check, expr: 'c > 0' }))).toEqual([])
   })
   it('effectiveEnforce uses per-type defaults', () => {
     const f = parseRulesFile(yamlText)
