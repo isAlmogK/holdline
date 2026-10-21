@@ -127,6 +127,13 @@ describe('exists never uses a placeholder that anonymous callers have', () => {
     const sql = `EXISTS (SELECT 1 FROM role_perms rp WHERE rp.role = ${operand})`
     expect(norm(sql)).toEqual({ opaque: sql })
   })
+  it.each([
+    "(auth.jwt() ->> 'role'::text)", 'auth.role()', "(auth.jwt() ->> 'aud'::text)",
+  ])('makes %s IN (SELECT …) opaque', operand => {
+    const sql = `(${operand} IN ( SELECT rp.role FROM role_perms rp WHERE (rp.perm = (auth.jwt() ->> 'sub'::text))))`
+    expect(norm(sql)).toHaveProperty('opaque')
+    expect(norm(`(${operand} IN ( SELECT rp.role FROM role_perms rp))`)).toHaveProperty('opaque')
+  })
   // A claim is compared as text in SQL (`->>`), but its JSON value may be a number or a boolean.
   it('makes other claims opaque too', () => {
     const sql = "EXISTS (SELECT 1 FROM role_perms rp WHERE rp.role = (auth.jwt() ->> 'tenant'::text))"
