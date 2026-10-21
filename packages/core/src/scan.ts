@@ -12,13 +12,25 @@ export function factsCachePath(root: string): string {
   return join(root, '.holdline/cache/facts.json')
 }
 
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
+
+async function gitLines(root: string, args: string[]): Promise<string[]> {
+  const { stdout } = await promisify(execFile)('git', ['ls-files', '-z', ...args], { cwd: root, maxBuffer: 64 * 1024 * 1024 })
+  return stdout.split('\0').filter(Boolean)
+}
+
 export async function listFiles(root: string): Promise<string[]> {
   try {
-    const { stdout } = await promisify(execFile)('git', ['ls-files', '--cached', '--others', '--exclude-standard'], { cwd: root, maxBuffer: 64 * 1024 * 1024 })
-    const files = stdout.split('\n').filter(f => f && !f.split('/').some(part => SKIP.has(part)))
-    if (files.length > 0) return files.sort()
+    const [tracked, deleted] = await Promise.all([
+      gitLines(root, ['--cached', '--others', '--exclude-standard']),
+      gitLines(root, ['--deleted']),
+    ])
+    const gone = new Set(deleted)
+    return tracked.filter(f => !gone.has(f) && !f.split('/').some(part => SKIP.has(part))).sort()
   } catch {
-    // not a git repository: walk the tree
+    // not a git repository, or git unavailable: walk the tree
   }
   const out: string[] = []
   const walk = async (dir: string): Promise<void> => {
@@ -38,15 +50,27 @@ export async function scan(root: string, analyzers: readonly Analyzer[]): Promis
   const cache = new FileCache(root)
   const parts: Facts[] = []
   const ran: string[] = []
+  const failed = (analyzer: Analyzer, message: string): Facts => ({
+    ...emptyFacts(),
+    analyzers: [{ name: analyzer.name, version: analyzer.version }],
+    diagnostics: [{ analyzer: analyzer.name, file: '', message, severity: 'error' as const }],
+  })
   for (const analyzer of analyzers) {
-    if (!(await analyzer.detect(root, files))) continue
+    let applies: boolean
+    try {
+      applies = await analyzer.detect(root, files)
+    } catch (e) {
+      ran.push(analyzer.name)
+      parts.push(failed(analyzer, `analyzer failed during detect: ${errorMessage(e)}`))
+      continue
+    }
+    if (!applies) continue
     ran.push(analyzer.name)
-    const diagnostic = (message: string) => ({ ...emptyFacts(), diagnostics: [{ analyzer: analyzer.name, file: '', message, severity: 'error' as const }] })
     try {
       const output = await analyzer.analyze({ root, files, cache })
       parts.push(parseFacts({ version: 1, ...output, analyzers: [{ name: analyzer.name, version: analyzer.version }] }, analyzer.name))
     } catch (e) {
-      parts.push(e instanceof FactsError ? diagnostic(`invalid facts: ${e.message}`) : diagnostic(`analyzer failed: ${(e as Error).message}`))
+      parts.push(e instanceof FactsError ? failed(analyzer, `invalid facts: ${e.message}`) : failed(analyzer, `analyzer failed: ${errorMessage(e)}`))
     }
   }
   return { facts: mergeFacts(parts), ran }
