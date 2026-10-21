@@ -1,0 +1,11 @@
+diff --git a/supabase/migrations/20261002000000_projects.sql b/supabase/migrations/20261002000000_projects.sql
+index 4bb53c0..96b99c2 100644
+--- a/supabase/migrations/20261002000000_projects.sql
++++ b/supabase/migrations/20261002000000_projects.sql
+@@ -12,5 +12,5 @@ create table public.invoices (
+   id uuid primary key default gen_random_uuid(),
+   org_id uuid not null references public.organizations (id),
+   amount integer not null,
+-  constraint invoices_amount_positive check (amount > 0)
++  constraint invoices_amount_positive check (amount >= 0)
+ );

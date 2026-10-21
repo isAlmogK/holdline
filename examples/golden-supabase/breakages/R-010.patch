@@ -1,0 +1,7 @@
+diff --git a/supabase/migrations/20261004000000_guest_role.sql b/supabase/migrations/20261004000000_guest_role.sql
+new file mode 100644
+index 0000000..6d179c7
+--- /dev/null
++++ b/supabase/migrations/20261004000000_guest_role.sql
+@@ -0,0 +1 @@
++alter type public.membership_role add value 'guest';

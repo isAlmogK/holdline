@@ -1,0 +1,9 @@
+diff --git a/supabase/migrations/20261003000000_rls.sql b/supabase/migrations/20261003000000_rls.sql
+index 5da0f21..96e1410 100644
+--- a/supabase/migrations/20261003000000_rls.sql
++++ b/supabase/migrations/20261003000000_rls.sql
+@@ -1,4 +1,3 @@
+-alter table public.organizations enable row level security;
+ alter table public.memberships enable row level security;
+ alter table public.profiles enable row level security;
+ alter table public.projects enable row level security;

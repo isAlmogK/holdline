@@ -1,0 +1,13 @@
+diff --git a/supabase/migrations/20261003000000_rls.sql b/supabase/migrations/20261003000000_rls.sql
+index 5da0f21..822f3cb 100644
+--- a/supabase/migrations/20261003000000_rls.sql
++++ b/supabase/migrations/20261003000000_rls.sql
+@@ -33,7 +33,7 @@ create policy "members create projects" on public.projects
+ 
+ create policy "owners update projects" on public.projects
+   for update to authenticated
+-  using (owner_id = (select auth.uid()))
++  using (public.is_org_member(org_id))
+   with check (owner_id = (select auth.uid()));
+ 
+ create policy "admins read invoices" on public.invoices
