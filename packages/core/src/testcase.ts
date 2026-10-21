@@ -15,7 +15,8 @@ export const TestCaseSchema = z.strictObject({
   as: ActorSchema.nullable(),
   seed: z.array(SeedSchema).default([]),
   do: z.strictObject({ op: OpSchema, path: z.string(), data: z.record(z.string(), z.unknown()).optional() }),
-  expect: z.enum(['allow', 'deny']),
+  // reject: a write the database must refuse (invariant cases; generated from Phase 1).
+  expect: z.enum(['allow', 'deny', 'reject']),
 })
 
 export const TestFileSchema = z.strictObject({
