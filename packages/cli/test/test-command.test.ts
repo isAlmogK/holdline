@@ -8,13 +8,13 @@ import { describe, expect, it } from 'vitest'
 import { copyFixture, failedCases, runTestCommand as run } from './helpers/fixture.js'
 import { runCli } from './helpers/project.js'
 
-// Each run boots a WASM Postgres per test file (seven here); allow for parallel-suite load.
+// Each run boots a WASM Postgres per test file (nine here); allow for parallel-suite load.
 const SLOW = 120_000
 const MIGRATION = 'supabase/migrations/0001_init.sql'
 const REPO = fileURLToPath(new URL('../../../', import.meta.url))
 const TSX = join(REPO, 'node_modules/.bin/tsx')
 const APPROVE_FIXTURE = join(REPO, 'scripts/approve-fixture.ts')
-const ALL = ['R-001', 'R-002', 'R-003', 'R-004', 'R-005', 'R-006', 'R-007']
+const ALL = ['R-001', 'R-002', 'R-003', 'R-004', 'R-005', 'R-006', 'R-007', 'R-008', 'R-009']
 
 const rulesOf = (stdout: string) => (JSON.parse(stdout).files as { rule: string }[]).map(f => f.rule)
 
@@ -26,7 +26,7 @@ describe('holdline test on postgres', () => {
     expect(json.infrastructure).toEqual([])
     expect(json.files.map((f: { rule: string; generated: string }) => [f.rule, f.generated])).toEqual(ALL.map(id => [id, 'missing']))
     expect(json.files.every((f: { store: string }) => f.store === 'postgres')).toBe(true)
-    expect(json.summary).toEqual({ passed: 20, failed: 0, rules: 7 })
+    expect(json.summary).toEqual({ passed: 24, failed: 0, rules: 9 })
     expect(existsSync(join(r.root, '.holdline/tests/R-004.yaml'))).toBe(true)
     // A second run uses the files it wrote and loads no facts (this facts file does not exist).
     const again = await runCli(['test', '--facts', 'missing.json', '--format', 'json'], { cwd: r.root })
@@ -59,6 +59,20 @@ describe('holdline test on postgres', () => {
     const r = await run('test-pg', [[MIGRATION, " check (role in ('owner', 'admin', 'member'))", '']])
     expect(r.code).toBe(1)
     expect(failedCases(r)).toEqual([['R-006', "create: rejects role '__holdline_invalid__'"]])
+  }, SLOW)
+
+  it('is red on a dropped unique constraint', async () => {
+    const r = await run('test-pg', [[MIGRATION, ',\n  unique (org_id, title)', '']])
+    expect(r.code).toBe(1)
+    expect(failedCases(r)).toEqual([['R-008', 'create: rejects a second row with the same org_id, title']])
+  }, SLOW)
+
+  // The primary key references auth.users: the seeded duplicate needs its own key and parent, or the primary key
+  // refuses the insert and the case passes without the unique constraint.
+  it('is red on a dropped unique column on a table whose primary key is a foreign key', async () => {
+    const r = await run('test-pg', [[MIGRATION, 'username text not null unique', 'username text not null']])
+    expect(r.code).toBe(1)
+    expect(failedCases(r)).toEqual([['R-009', 'create: rejects a second row with the same username']])
   }, SLOW)
 
   // `using (true)` also lets anonymous callers through, so the authenticated cases fail too.
@@ -110,7 +124,7 @@ describe('holdline test on postgres', () => {
 
   it('notes muted rules, rules no cases can be generated for, and orphan test files', async () => {
     const access = [
-      '  - id: R-009', '    text: Signed-in users only', '    type: access', '    target:', '      routes: GET /x',
+      '  - id: R-020', '    text: Signed-in users only', '    type: access', '    target:', '      routes: GET /x',
       '    requires:', '      atom:', '        op: authenticated', '    enforce:', '      - test', '    status: approved',
       '    approved:', '      by: fixture', '      at: 2026-10-21', '      hash: unstamped', '',
     ].join('\n')
@@ -123,10 +137,10 @@ describe('holdline test on postgres', () => {
     const r = await runCli(['test', '--facts', 'facts.json', '--format', 'json'], { cwd: root })
     expect(r.code, r.stderr).toBe(0)
     const files = JSON.parse(r.stdout).files as { rule: string; cases: unknown[]; skipped: string[] }[]
-    expect(files.map(f => f.rule)).toEqual(['R-009', ...ALL, 'R-050'])
+    expect(files.map(f => f.rule)).toEqual(['R-020', ...ALL, 'R-050'])
     const notes = files.filter(f => f.cases.length === 0)
     expect(notes).toEqual([
-      { rule: 'R-009', cases: [], skipped: ['not tested: no cases can be generated for access rules'] },
+      { rule: 'R-020', cases: [], skipped: ['not tested: no cases can be generated for access rules'] },
       { rule: 'R-007', store: 'postgres', cases: [], skipped: ['not tested: rule is muted'] },
       { rule: 'R-050', store: 'postgres', cases: [], skipped: ['orphan test file: no approved rule R-050; delete .holdline/tests/R-050.yaml'] },
     ])

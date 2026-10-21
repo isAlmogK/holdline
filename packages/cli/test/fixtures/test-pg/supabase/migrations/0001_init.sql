@@ -11,7 +11,14 @@ create table public.projects (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.orgs(id), owner_id uuid not null,
   title text not null,
-  amount int not null check (amount > 0)
+  amount int not null check (amount > 0),
+  unique (org_id, title)
+);
+
+-- The Supabase profile shape: the primary key references auth.users, and the username is unique.
+create table public.profiles (
+  id uuid primary key references auth.users(id),
+  username text not null unique
 );
 
 alter table public.projects enable row level security;

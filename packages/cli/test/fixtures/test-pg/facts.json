@@ -36,9 +36,22 @@
       ],
       "primaryKey": ["id"],
       "foreignKeys": [{ "columns": ["org_id"], "references": { "table": "public.orgs", "columns": ["id"] } }],
+      "uniques": [["org_id", "title"]],
       "checks": [{ "name": "projects_amount_check", "expr": "(amount > 0)" }],
       "rlsEnabled": true,
       "location": { "file": "supabase/migrations/0001_init.sql", "line": 10 }
+    },
+    {
+      "id": "pg:public.profiles",
+      "name": "public.profiles",
+      "columns": [
+        { "name": "id", "type": "uuid", "nullable": false },
+        { "name": "username", "type": "text", "nullable": false }
+      ],
+      "primaryKey": ["id"],
+      "foreignKeys": [{ "columns": ["id"], "references": { "table": "auth.users", "columns": ["id"] } }],
+      "uniques": [["username"]],
+      "location": { "file": "supabase/migrations/0001_init.sql", "line": 19 }
     }
   ]
 }

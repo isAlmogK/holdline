@@ -136,3 +136,34 @@ rules:
       by: fixture
       at: 2026-10-21
       hash: ca04a0224371
+  - id: R-008
+    text: A project title is unique within its org
+    type: invariant
+    target:
+      store: postgres
+      table: public.projects
+    kind: unique
+    columns:
+      - org_id
+      - title
+    evidence: []
+    status: approved
+    approved:
+      by: fixture
+      at: 2026-10-21
+      hash: 5ff8c459664d
+  - id: R-009
+    text: A username is taken once
+    type: invariant
+    target:
+      store: postgres
+      table: public.profiles
+    kind: unique
+    columns:
+      - username
+    evidence: []
+    status: approved
+    approved:
+      by: fixture
+      at: 2026-10-21
+      hash: 603c687761a2

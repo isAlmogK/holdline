@@ -88,6 +88,86 @@ describe('postgres invariant tests', () => {
   })
 })
 
+describe('postgres invariant cases isolated from other keys', () => {
+  const keyed = parseFacts({
+    version: 1,
+    tables: [
+      { id: 'pg:public.users', name: 'public.users', columns: [{ name: 'id', type: 'uuid', nullable: false }], primaryKey: ['id'] },
+      { id: 'pg:public.orgs', name: 'public.orgs', columns: [{ name: 'id', type: 'uuid', nullable: false }], primaryKey: ['id'] },
+      { id: 'pg:public.tenants', name: 'public.tenants', columns: [{ name: 'id', type: 'uuid', nullable: false }], primaryKey: ['id'] },
+      // The Supabase profile shape: the primary key is also a foreign key.
+      { id: 'pg:public.profiles', name: 'public.profiles', columns: [
+        { name: 'id', type: 'uuid', nullable: false }, { name: 'username', type: 'text', nullable: false },
+      ], primaryKey: ['id'], foreignKeys: [{ columns: ['id'], references: { table: 'public.users', columns: ['id'] } }] },
+      { id: 'pg:public.slugs', name: 'public.slugs', columns: [
+        { name: 'id', type: 'uuid', nullable: false, default: 'gen_random_uuid()' },
+        { name: 'org_id', type: 'uuid', nullable: false },
+        { name: 'slug', type: 'text', nullable: false },
+        { name: 'kind', type: 'text', nullable: false },
+        { name: 'rank', type: 'integer', nullable: true, default: '0' },
+      ], primaryKey: ['id'], uniques: [['org_id', 'slug'], ['slug', 'kind'], ['slug', 'rank']],
+        foreignKeys: [{ columns: ['org_id'], references: { table: 'public.orgs', columns: ['id'] } }],
+        checks: [{ expr: "(kind = ANY (ARRAY['page'::text, 'post'::text]))" }] },
+      { id: 'pg:public.tags', name: 'public.tags', columns: [
+        { name: 'id', type: 'uuid', nullable: false, default: 'gen_random_uuid()' },
+        { name: 'slug', type: 'text', nullable: false },
+        { name: 'kind', type: 'text', nullable: false },
+      ], primaryKey: ['id'], uniques: [['slug', 'kind']], checks: [{ expr: "(kind IN ('page'))" }] },
+      { id: 'pg:public.docs', name: 'public.docs', columns: [
+        { name: 'id', type: 'uuid', nullable: false, default: 'gen_random_uuid()' },
+        { name: 'org_id', type: 'uuid', nullable: false },
+      ], primaryKey: ['id'], foreignKeys: [
+        { columns: ['org_id'], references: { table: 'public.orgs', columns: ['id'] } },
+        { columns: ['org_id'], references: { table: 'public.tenants', columns: ['id'] } },
+      ] },
+    ],
+  })
+  const unique = (table: string, columns: string[]) =>
+    generateTests(rule({ type: 'invariant', target: { store: 'postgres', table }, kind: 'unique', columns }), vocab, keyed)!
+
+  it('unique: a primary key that is a foreign key gets a second value and parent in the seeded duplicate', () => {
+    const f = unique('profiles', ['username'])
+    const row = { id: 'id-1', username: 'x' }
+    expect(f.cases).toEqual([
+      { name: 'create: a complete valid row inserts', as: null, seed: [{ path: 'public.users', data: { id: 'id-1' } }],
+        do: { op: 'create', path: 'public.profiles', data: row }, expect: 'allow' },
+      { name: 'create: rejects a second row with the same username', as: null,
+        seed: [{ path: 'public.users', data: { id: 'id-1' } }, { path: 'public.users', data: { id: 'id-2' } },
+          { path: 'public.profiles', data: { id: 'id-2', username: 'x' } }],
+        do: { op: 'create', path: 'public.profiles', data: row }, expect: 'reject' },
+    ])
+    expect(f.skipped).toEqual([])
+  })
+  it('unique: a rule on part of other unique keys varies their other columns, and sets columns with a default', () => {
+    const f = unique('slugs', ['slug'])
+    const row = { org_id: 'org_id-1', slug: 'x', kind: 'page', rank: 1 }
+    expect(f.cases[0]!.do.data).toEqual(row)
+    expect(f.cases[1]).toEqual({
+      name: 'create: rejects a second row with the same slug', as: null,
+      seed: [{ path: 'public.orgs', data: { id: 'org_id-1' } }, { path: 'public.orgs', data: { id: 'org_id-2' } },
+        { path: 'public.slugs', data: { org_id: 'org_id-2', slug: 'x', kind: 'post', rank: 2 } }],
+      do: { op: 'create', path: 'public.slugs', data: row }, expect: 'reject' })
+    expect(f.skipped).toEqual([])
+  })
+  it('unique: skips the reject case when another key cannot differ', () => {
+    const f = unique('tags', ['slug'])
+    expect(f.cases.map(c => c.expect)).toEqual(['allow'])
+    expect(f.skipped).toEqual(['create: cannot isolate unique slug (another unique key covers slug, kind)'])
+  })
+  it('unique: skips the reject case when another key is part of the rule columns', () => {
+    const f = unique('slugs', ['org_id', 'slug', 'kind'])
+    expect(f.cases.map(c => c.expect)).toEqual(['allow'])
+    expect(f.skipped).toEqual(['create: cannot isolate unique org_id, slug, kind (another unique key covers org_id, slug)'])
+  })
+  it('fk: skips the reject case when another foreign key covers a rule column', () => {
+    const r = rule({ type: 'invariant', target: { store: 'postgres', table: 'docs' }, kind: 'fk', columns: ['org_id'],
+      references: { table: 'orgs', columns: ['id'] } })
+    const f = generateTests(r, vocab, keyed)!
+    expect(f.cases.map(c => c.expect)).toEqual(['allow'])
+    expect(f.skipped).toEqual(['create: cannot isolate fk org_id (another foreign key covers org_id)'])
+  })
+})
+
 describe('firestore invariant tests', () => {
   const condition = { and: [
     { atom: { op: 'authenticated' } },

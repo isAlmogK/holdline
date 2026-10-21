@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { checkLiteral, fillerValue } from '../src/testgen-filler.js'
+import { checkLiteral, checkLiterals, fillerValue, otherFillerValue } from '../src/testgen-filler.js'
 
 describe('fillerValue', () => {
   it.each([
@@ -26,5 +26,25 @@ describe('fillerValue', () => {
     expect(checkLiteral('status', ["(status_code IN ('x'))", "(order_status IN ('y'))", "(status IN ('z'))"])).toBe('z')
     expect(checkLiteral('status', ['("status" IN (\'q\', \'r\'))'])).toBe('q')
     expect(checkLiteral('role', ['(("role")::text = ANY (ARRAY[\'owner\'::text]))'])).toBe('owner')
+  })
+})
+
+describe('otherFillerValue', () => {
+  it.each([
+    ['uuid', 'filler-2'], ['text', 'x2'], ['integer', 2], ['boolean', true],
+    ['timestamp with time zone', '1970-01-02T00:00:00Z'], ['date', '1970-01-02'], ['jsonb', { value: 2 }], ['text[]', ['x']],
+  ])('%s → %j', (type, value) => {
+    expect(otherFillerValue({ name: 'c', type })).toEqual(value)
+  })
+  it('uses the second enum label or CHECK literal, and has none when the list has one', () => {
+    expect(otherFillerValue({ name: 'role', type: 'member_role' }, { enumLabels: ['owner', 'admin'] })).toBe('admin')
+    expect(otherFillerValue({ name: 'role', type: 'member_role' }, { enumLabels: ['owner'] })).toBeUndefined()
+    expect(otherFillerValue({ name: 'kind', type: 'text' }, { checks: ["(kind = ANY (ARRAY['a'::text, 'b'::text]))"] })).toBe('b')
+    expect(otherFillerValue({ name: 'kind', type: 'text' }, { checks: ["(kind IN ('a'))"] })).toBeUndefined()
+  })
+  it('lists every literal of the check', () => {
+    expect(checkLiterals('kind', ["((kind)::text = ANY ((ARRAY['a]'::character varying, 'it''s'::character varying])::text[]))"])).toEqual(['a]', "it's"])
+    expect(checkLiterals('kind', ["(kind IN ('a', 'b)', 'c'))"])).toEqual(['a', 'b)', 'c'])
+    expect(checkLiterals('kind', ["(other IN ('a'))"])).toBeUndefined()
   })
 })
