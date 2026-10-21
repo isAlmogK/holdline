@@ -398,17 +398,19 @@ after printing its results (see rules-file.md "`holdline check` and exit codes")
 ## Firestore and Storage analyzer (`packages/analyzer-firestore`)
 
 Reads Firestore and Storage security rules and emits `policies`, `symbols` (kind `match`) and `diagnostics`. It emits no
-`collections`. Sources: `discover.ts`, `parser.ts`, `expand.ts`, `condition.ts`, `value.ts`, `compare.ts`, `lookup-path.ts`,
-`inline.ts`, `analyzer.ts`. No model, no network. Name `firestore`, version `0.1.0`.
+`collections`. Sources: `discover.ts` (finding rules files), `lexer.ts`, `parser.ts`, `parse-expr.ts`, `parse-path.ts`, `ast.ts`
+(parsing), `expand.ts` (targets, ops, ids), `scope.ts` (scopes, envs, budgets), `inline.ts`, `condition.ts`, `value.ts`, `compare.ts`,
+`lookup-path.ts` (normalization), `simplify.ts`, `analyze-file.ts` (one file's facts), `analyzer.ts`, `index.ts`. No model, no network.
+Name `firestore`, version `0.1.0`.
 
 ### Discovery
 
 | Item | Detail |
 |---|---|
-| `detect` | True when `firestore.rules` or `storage.rules` config globs are set, or discovery finds a rules file or a warning |
-| Config globs | `firestore.rules` / `storage.rules` globs in `.holdline/config.yaml` replace the defaults for that store only. A glob list that matches no file gives a warning on `.holdline/config.yaml` |
+| `detect` | True when `firestore.rules` or `storage.rules` config globs are set, or discovery finds a rules file or an error |
+| Config globs | `firestore.rules` / `storage.rules` globs in `.holdline/config.yaml` replace the defaults for that store only. A glob list that matches no file gives an `error` on `.holdline/config.yaml` |
 | Defaults | For a store with no globs: `firestore.rules` / `storage.rules` at the root, and the `rules` path of every `firebase.json` at any depth. Each path is relative to its own `firebase.json`. The `firestore` and `storage` keys may be an object or an array of objects (several databases or buckets) |
-| `firebase.json` warnings | Invalid JSON, or a pointer outside the repo or at a file that is not in the repo. Other shapes are ignored |
+| `firebase.json` errors | `invalid JSON: <reason>`; `could not read: <reason>`; `points at <path>, which is not in the repository` (outside the repo, `..` or `../...`, or a file not in the repo). Each leaves a store's rules incomplete, so it is an `error`. Other valid JSON shapes are ignored |
 | Files | Sorted and deduplicated. Each is analyzed on its own and cached |
 
 ### Parse errors and diagnostics
@@ -419,9 +421,10 @@ Reads Firestore and Storage security rules and emits `policies`, `symbols` (kind
 | File cannot be read | `error`, `could not read: <reason>` |
 | `service` other than `cloud.firestore` and `firebase.storage` | `warning`, skipped |
 | No `service` block | `warning`, `no service block` |
-| A `match` with allows outside `/databases/{database}/documents` (Storage: `/b/{bucket}/o`) | `warning`, the path is kept in full. A prefix split across nested matches is recognized |
+| A `match` holding allows, or a leaf `match`, whose path cannot match `/databases/{database}/documents` (Storage: `/b/{bucket}/o`) | `warning`, the path is kept in full. A prefix split across nested matches is recognized (see Target) |
 | A function declared twice in one block | `warning`, the last one is used |
-| Discovery problems | `warning`, see Discovery |
+| Discovery problems | `error`, see Discovery |
+| Analysis of one file throws (e.g. a stack overflow on thousands of nested parentheses) | `error`, `analysis failed: <message>`. That file yields no policies; other files are kept. Not cached |
 
 Only `error` makes rules `unknown` (see "Diagnostics and `unknown`").
 
@@ -431,10 +434,10 @@ Only `error` makes rules `unknown` (see "Diagnostics and `unknown`").
 |---|---|
 | Policy | One per `allow` statement and op. `ops` has that one op. `evidence` is the `allow` line. `functions` lists the user functions the condition inlined or referenced, sorted |
 | Ops | `read` gives `read` and `list`; `get` gives `read`; `list` gives `list`; `write` gives `create`, `update`, `delete`; `create`, `update`, `delete` give themselves |
-| Target | The concatenated `match` paths with the prefix removed. `{x=**}` stays. A `$(expr)` segment in a match path becomes a rest wildcard `{_interpN=**}` (it may span segments, so it overlaps more, never less). An allow directly in the service or prefix match has target `/` |
+| Target | The concatenated `match` paths with the prefix removed. The prefix is the first three segments when the first is `databases` (Storage: `b`) or a `{x}` wildcard, the second is any single segment (`{database}`, `(default)`, `my-app.appspot.com`), and the third is `documents` (Storage: `o`) or a `{x}` wildcard. A rest wildcard (or a `$(...)` segment) within the first three segments, after segments that match, can reach every document: the target is `/{<name>=**}` (`/databases/{db}/{rest=**}` and `/{path=**}` give `/{rest=**}` and `/{path=**}`). Any other path is kept in full, with a warning. `{x=**}` stays. A `$(expr)` segment in a match path becomes a rest wildcard `{_interpN=**}` (it may span segments, so it overlaps more, never less). An allow directly in the service or prefix match has target `/` |
 | Policy id | `<store>:<target>#<op>@<line>`. A second allow with the same id gets `:<col>` added (`...@12:9`) |
 | Symbol | One `match` symbol per distinct (store, target), id `<store>:<target>`, at the first `match` line that gives it. `lang` is `firestore` or `storage` |
-| Condition | `allow ...;` (no `if`) is `{ and: [] }`; `if false` is `{ or: [] }`; otherwise the normalization below, then a cleanup that flattens nested `and`/`or` and drops duplicate members that hold no `opaque` |
+| Condition | `allow ...;` (no `if`) is `{ and: [] }`; `if false` is `{ or: [] }`; otherwise the normalization below, then a cleanup that flattens nested `and`/`or`, drops duplicate members that hold no `opaque`, and turns `not(not x)` into `x` |
 
 ### Normalization
 
@@ -444,7 +447,8 @@ non-error values and logic maps structurally. A condition that cannot be mapped 
 
 Functions are inlined with lexical scope: parameters are bound to the call's arguments in the caller's scope, `let`s in order.
 A recursive call is `opaque`; so is a call past depth 20, or past 1000 inlinings in one condition (this stops exponential growth
-when functions call each other several times). A user function named like a built-in (`get`, `exists`, `getAfter`, `existsAfter`,
+when functions call each other several times). Each parameter or `let` reference re-reads its bound expression; past 10000 such
+resolutions in one condition a reference is `opaque` (`let a1 = a0 && a0; let a2 = a1 && a1; ...` would otherwise double per `let`). A user function named like a built-in (`get`, `exists`, `getAfter`, `existsAfter`,
 `debug`, `bool`, `bytes`, `float`, `int`, `string`, `path`) is never inlined, and its calls are `opaque`.
 
 | Rules expression | Expr |
@@ -466,8 +470,9 @@ when functions call each other several times). A user function named like a buil
 | `true` / `false` | `{ and: [] }` / `{ or: [] }` |
 | `a ? b : c` | `or[and[a, b], and[not a, c]]` |
 | A bare boolean value (`resource.data.published`) | `eq(<operand>, true)`; exact, since a rules condition must be a boolean |
-| `x.get('f', d)` on a map | `x.f` when `d` is `null` (the model's absent value), or when neither `d` nor `null` satisfies the comparison against a literal. Otherwise `opaque`. `<` and `>` with a fallback map only when both values are numbers. A fallback on both sides, or on the right of `in`, is `opaque` |
+| `x.get('f', d)` on a map | `x.f` when `d` is `null` (the model's absent value), or when neither `d` nor `null` satisfies the comparison against a literal. Otherwise `opaque`. `<` and `>` with a fallback map only when both values are numbers. A non-null fallback on both sides, or on the right of `in`, is `opaque` (a `null` default is no fallback) |
 | Integer literal | A literal; past 2^53 it is `opaque` |
+| Float literal | A literal; a non-finite one (`1.0e999`) is `opaque` |
 | Anything else | `opaque` with the source text |
 
 Always `opaque`: `<=`, `>=`, `is`; `request.auth` compared with anything but `null`; `getAfter(P)` and `existsAfter(P)` (they read
