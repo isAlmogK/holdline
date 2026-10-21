@@ -182,6 +182,7 @@ A string matching `OPERAND_PATTERN`, or `{ literal }`.
 | `resource.<field>` | The stored record |
 | `incoming.<field>` | The data being written |
 | `param.<name>` | A route or path parameter (no dots) |
+| `doc(<path>).<field>` | A field of another document (lookup). `<path>` starts with `/`, has no parentheses and may hold `{<operand>}` placeholders (`doc(/users/{actor.uid}).accountIds`); `<field>` is one or more `[A-Za-z0-9_]+` segments joined by dots. The Firestore analyzer maps `get(P).data.f` to it. Two lookups are equal only when their strings are equal |
 | `{ literal: string \| number \| boolean \| null \| (string \| number)[] }` | Constant |
 
 `in` takes an **array literal** on the right (`{ literal: ['admin', 'trainer'] }`). Any other right side is never
@@ -219,18 +220,19 @@ try each part of C's `and`; try each part of R's `or`; compare two atoms; compar
 
 ### What implies `authenticated`
 
-Only atoms that are false for an anonymous caller imply `authenticated`:
+Only atoms that are false for an anonymous caller imply `authenticated`. An operand is **actor-dependent** when it is an `actor.*` operand or a lookup whose path contains `{actor.`:
 
 | Atom | Implies `authenticated` |
 |---|---|
 | `authenticated` | yes |
 | `exists` whose `doc` contains an actor placeholder (`{actor.`) | yes |
-| `eq` between an actor operand and a non-null **string or number** literal | yes |
-| `in` between an actor operand and a **non-empty array** literal | yes |
+| `eq` between an actor-dependent operand and a non-null **string or number** literal | yes |
+| `in` between an actor-dependent operand and a **non-empty array** literal | yes |
+| `eq`/`in` where the non-actor side is not such a literal (for example `x in doc(/users/{actor.uid}).accountIds`, or a lookup without `{actor.` in its path) | no |
 | `eq` to a boolean or null literal, `ne`, `lt`, `gt`, `isNull`, anything else | no |
 
 **Anonymous caller convention.** An anonymous caller is `actor = null` (`as: null` in test cases). Every atom with
-an actor operand (`actor.uid`, `actor.role`, `actor.claim.*`, or an `exists` doc with an `{actor.` placeholder) is
+an actor operand (`actor.uid`, `actor.role`, `actor.claim.*`, an `exists` doc with an `{actor.` placeholder, or an `eq`/`in` lookup whose path has an `{actor.` placeholder) is
 false for it, including `ne` and `isNull` on an actor operand. The prover is sound against this model; the
 model-based property test in `packages/core/test/logic.test.ts` checks it. The table above is deliberately narrower
 than the model allows (it does not count `ne` or `isNull` on an actor operand), which only makes it more conservative.

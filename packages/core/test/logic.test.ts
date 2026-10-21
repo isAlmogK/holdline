@@ -283,3 +283,34 @@ describe('prover soundness (model based)', () => {
     expect(proved).toBeGreaterThan(50)
   })
 })
+
+describe('lookup operands in implication', () => {
+  const memberRole = (path: string): Atom => ({ op: 'eq', left: `doc(${path}).role`, right: { literal: 'admin' } })
+  it('a lookup atom implies itself and only an equal one', () => {
+    const a = memberRole('/accounts/{resource.accountId}/members/{actor.uid}')
+    expect(atomImplies(a, a)).toBe(true)
+    expect(atomImplies(a, memberRole('/accounts/{resource.orgId}/members/{actor.uid}'))).toBe(false)
+  })
+  it('in against a lookup array implies itself', () => {
+    const a: Atom = { op: 'in', left: 'resource.accountId', right: 'doc(/users/{actor.uid}).accountIds' }
+    expect(atomImplies(a, a)).toBe(true)
+  })
+  it('lookups on the actor imply authenticated only under the literal rule', () => {
+    expect(atomImplies(memberRole('/accounts/{resource.accountId}/members/{actor.uid}'), { op: 'authenticated' })).toBe(true)
+    expect(atomImplies({ op: 'in', left: 'resource.accountId', right: 'doc(/users/{actor.uid}).accountIds' }, { op: 'authenticated' })).toBe(false)
+    expect(atomImplies({ op: 'eq', left: 'doc(/settings/global).open', right: { literal: true } }, { op: 'authenticated' })).toBe(false)
+  })
+  it('renameParams renames params inside lookup paths', () => {
+    const e: Expr = { atom: { op: 'eq', left: 'doc(/accounts/{param.acct}/members/{actor.uid}).role', right: { literal: 'admin' } } }
+    expect(renameParams(e, new Map([['acct', 'accountId']]))).toEqual({ atom: { op: 'eq', left: 'doc(/accounts/{param.accountId}/members/{actor.uid}).role', right: { literal: 'admin' } } })
+  })
+  it('renameParams with fresh names renames unmapped params inside lookup paths', () => {
+    const e: Expr = { atom: { op: 'eq', left: 'doc(/a/{param.x}).f', right: 'param.x' } }
+    expect(renameParams(e, new Map(), { fresh: true })).toEqual({ atom: { op: 'eq', left: 'doc(/a/{param.__p0}).f', right: 'param.__p0' } })
+  })
+  it('mentionsOperand finds a lookup operand', () => {
+    const e: Expr = { atom: { op: 'in', left: 'resource.accountId', right: 'doc(/users/{actor.uid}).accountIds' } }
+    expect(mentionsOperand(e, 'doc(/users/{actor.uid}).accountIds')).toBe(true)
+    expect(mentionsOperand(e, 'doc(/users/{actor.uid}).other')).toBe(false)
+  })
+})

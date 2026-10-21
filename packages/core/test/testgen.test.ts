@@ -194,3 +194,76 @@ cases:
     expect(() => parseTestFile(text.replace('expect: reject', 'expect: maybe'))).toThrow()
   })
 })
+
+describe('generateTests with lookup operands', () => {
+  const vocab = new Map()
+  const rule = (requires: unknown, ops: string[] = ['read']) => RuleSchema.parse({
+    id: 'R-001', text: 't', status: 'approved', type: 'data-access',
+    target: { store: 'firestore', path: '/dogs/{dogId}' }, ops, requires,
+  })
+
+  it('seeds the looked-up document so membership holds, and breaks it on deny', () => {
+    const file = generateTests(rule({ and: [
+      { atom: { op: 'authenticated' } },
+      { atom: { op: 'in', left: 'resource.accountId', right: 'doc(/users/{actor.uid}).accountIds' } },
+    ] }), vocab)!
+    const [allow, denyAuth, denyMember] = file.cases
+    expect(allow!.expect).toBe('allow')
+    expect(allow!.seed).toEqual([
+      { path: '/dogs/dogId-1', data: { accountId: 'value-1' } },
+      { path: '/users/user-1', data: { accountIds: ['value-1'] } },
+    ])
+    expect(denyAuth!.as).toBeNull()
+    expect(denyMember!.expect).toBe('deny')
+    expect(denyMember!.seed.find(s => s.path === '/dogs/dogId-1')!.data).toEqual({ accountId: 'other-value' })
+  })
+
+  it('seeds a role field on a looked-up member document', () => {
+    const file = generateTests(rule({ atom: { op: 'eq', left: 'doc(/accounts/{resource.accountId}/members/{actor.uid}).role', right: { literal: 'admin' } } }), vocab)!
+    expect(file.skipped).toEqual([])
+    const allow = file.cases[0]!
+    expect(allow.seed).toContainEqual({ path: '/accounts/value-1/members/user-1', data: { role: 'admin' } })
+    expect(file.cases[1]!.seed).toContainEqual({ path: '/accounts/value-1/members/user-1', data: { role: 'other-value' } })
+  })
+
+  it('merges an exists doc and a lookup on the same path into one seed', () => {
+    const file = generateTests(rule({ and: [
+      { atom: { op: 'exists', doc: '/accounts/{resource.accountId}/members/{actor.uid}' } },
+      { atom: { op: 'eq', left: 'doc(/accounts/{resource.accountId}/members/{actor.uid}).role', right: { literal: 'admin' } } },
+    ] }), vocab)!
+    const memberSeeds = file.cases[0]!.seed.filter(s => s.path === '/accounts/value-1/members/user-1')
+    expect(memberSeeds).toEqual([{ path: '/accounts/value-1/members/user-1', data: { role: 'admin' } }])
+  })
+
+  it('skips a lookup whose path cannot be resolved', () => {
+    const file = generateTests(rule({ atom: { op: 'eq', left: 'doc(/orgs/{actor.claim.orgId}).open', right: { literal: true } } }), vocab)!
+    expect(file.cases).toEqual([])
+    expect(file.skipped[0]).toMatch(/cannot resolve \{actor\.claim\.orgId\}/)
+  })
+
+  it('creates a value for a stored-record field that only a lookup path needs', () => {
+    const file = generateTests(rule({ atom: { op: 'eq', left: 'doc(/orgs/{resource.orgId}).open', right: { literal: true } } }), vocab)!
+    expect(file.cases[0]!.seed).toEqual([
+      { path: '/dogs/dogId-1', data: { orgId: 'value-1' } },
+      { path: '/orgs/value-1', data: { open: true } },
+    ])
+  })
+
+  it('removes the looked-up document when breaking an exists on the same path', () => {
+    const file = generateTests(rule({ and: [
+      { atom: { op: 'exists', doc: '/accounts/{resource.accountId}/members/{actor.uid}' } },
+      { atom: { op: 'eq', left: 'doc(/accounts/{resource.accountId}/members/{actor.uid}).role', right: { literal: 'admin' } } },
+    ] }), vocab)!
+    const denyNoDoc = file.cases.find(c => c.name.includes('denied without exists'))!
+    expect(denyNoDoc.seed.filter(s => s.path.startsWith('/accounts'))).toEqual([])
+  })
+
+  it('skips dotted lookup fields and unsupported comparisons', () => {
+    const dotted = generateTests(rule({ atom: { op: 'eq', left: 'doc(/accounts/x).plan.tier', right: { literal: 'pro' } } }), vocab)!
+    expect(dotted.cases).toEqual([])
+    expect(dotted.skipped[0]).toMatch(/nested field/)
+    const lt = generateTests(rule({ atom: { op: 'lt', left: 'doc(/accounts/x).n', right: { literal: 3 } } }), vocab)!
+    expect(lt.cases).toEqual([])
+    expect(lt.skipped).toHaveLength(1)
+  })
+})

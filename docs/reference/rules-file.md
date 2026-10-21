@@ -406,10 +406,11 @@ How each atom is satisfied and then broken:
 | `authenticated` | Default actor | `as: null` |
 | `isNull x` | Sets `x` to null | Sets `x` to `'not-null'` |
 | `in x [..]` | Sets `x` to the first value | Sets `x` to `'not-allowed'` |
-| `eq a b` | Copies the fixed side (`actor.uid`, `param.*`, literal) to the other, or invents `value-n` for both | Sets the `resource.*` or `incoming.*` side to `'other-value'`; else a claim or role side; else changes the actor uid to `user-2` |
+| `in x doc(P).f` | Sets `x` (the fixed value, or a new `value-n`), then seeds the document at `P` with `f` = `[value]` | Sets a `resource.*` or `incoming.*` `x` to `'other-value'`; else sets `f` to `['other-value']` |
+| `eq a b` | Copies the fixed side (`actor.uid`, `param.*`, literal) to the other, or invents `value-n` for both. A `doc(P).f` side seeds field `f` of the document at `P` | Sets the `resource.*` or `incoming.*` side to `'other-value'`; else the looked-up field `f` to `'other-value'`; else a claim or role side; else changes the actor uid to `user-2` |
 | `exists doc` | Adds the document to the seed, filling placeholders from the world. Postgres `pg:<table>?<col>={<operand>}...` becomes a row | Leaves the document out |
 
-`exists` atoms are satisfied last, so the placeholders they refer to already have values.
+Atoms are satisfied in three stages: plain atoms, then atoms with a lookup operand, then `exists` atoms, so the placeholders they refer to already have values. A `resource.*` or `incoming.*` field that only a lookup path needs (`doc(/accounts/{resource.accountId}/members/{actor.uid}).role`) gets a fresh `value-n`; an `exists` doc alone does not (its unset placeholder is skipped). A seeded Firestore document is unique per path: an `exists` doc and lookups on the same path merge into one seed entry with the fields combined (conflicting values are skipped as `conflicting conditions`). Breaking an `exists` also removes any document seeded at its path by a lookup.
 
 ### When generation is skipped
 
@@ -423,13 +424,15 @@ Nothing is generated, `cases` is empty and `skipped` has one reason, when:
 | `in` with a non-array or empty right side | `cannot satisfy ...` |
 | Two atoms need different values on the same field | `conflicting conditions on ...` |
 | An operand with a dot beyond one field level (`resource.address.city`, `actor.claim.a.b`) | `nested field ... is not generated yet` |
-| An `exists` placeholder has no value in the generated world | `cannot resolve {...}` |
+| An `exists` or lookup placeholder has no value in the generated world (lookups create `resource.*`/`incoming.*` values, so this is for `actor.claim.*`, `actor.role`, and so on) | `cannot resolve {...}` |
+| A lookup field with a dot (`doc(/a).plan.tier`) | `nested field ... is not generated yet` |
+| A lookup used with `ne`, `lt` or `gt` | `<op> conditions are not generated yet` |
 
 Per op, only that op is skipped (the others are still generated) and the reason is added to `skipped`:
 
 | Case | Reason |
 |---|---|
-| `create` and an atom reads the stored record (`resource.*`, or an `exists` doc containing `{resource.`) | `create: the condition reads the stored record, which does not exist on create` |
+| `create` and an atom reads the stored record (`resource.*`, or an `exists` doc or lookup path containing `{resource.`) | `create: the condition reads the stored record, which does not exist on create` |
 | `list` and the satisfied record has fields | `list: needs query filters to test; read cases cover the condition` |
 
 Parse and write with `parseTestFile` / `serializeTestFile`.
