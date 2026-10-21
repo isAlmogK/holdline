@@ -245,6 +245,11 @@ A vocabulary entry names a condition once so rules can say `{ ref: <id> }`.
 of `opaque`. Core stores and validates the field and hands the approved entries' recognizers to the analyzers
 (`AnalyzerContext.recognizers`, see facts.md); the analyzers act on it.
 
+The Firestore analyzer acts on `firestore-function`: a call to a zero-parameter function with that name becomes
+`{ ref: <id> }` when the file declares the name exactly once. Functions with parameters are inlined, and so is a recognized
+function used as a value (for example inside a comparison). Matching is by name, so after the body of a recognized function
+changes, re-approve the vocabulary entry. See facts.md "Firestore and Storage analyzer".
+
 Expansion: `expand` replaces each `ref` with the entry's `expr`, recursively. An unknown id becomes
 `opaque "unknown predicate ..."`, and a cycle becomes `opaque "circular predicate ..."`; an `opaque` never
 satisfies a requirement. Rules referring to a vocabulary id that is not in the file therefore fail rather than pass.
