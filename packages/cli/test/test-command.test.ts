@@ -1,7 +1,9 @@
+import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { parseTestFile } from '@holdline/core'
+import { fileURLToPath } from 'node:url'
+import { parseTestFile, serializeTestFile } from '@holdline/core'
 import { describe, expect, it } from 'vitest'
 import { copyFixture, failedCases, runTestCommand as run } from './helpers/fixture.js'
 import { runCli } from './helpers/project.js'
@@ -9,6 +11,9 @@ import { runCli } from './helpers/project.js'
 // Each run boots a WASM Postgres per test file (seven here); allow for parallel-suite load.
 const SLOW = 120_000
 const MIGRATION = 'supabase/migrations/0001_init.sql'
+const REPO = fileURLToPath(new URL('../../../', import.meta.url))
+const TSX = join(REPO, 'node_modules/.bin/tsx')
+const APPROVE_FIXTURE = join(REPO, 'scripts/approve-fixture.ts')
 const ALL = ['R-001', 'R-002', 'R-003', 'R-004', 'R-005', 'R-006', 'R-007']
 
 const rulesOf = (stdout: string) => (JSON.parse(stdout).files as { rule: string }[]).map(f => f.rule)
@@ -82,20 +87,49 @@ describe('holdline test on postgres', () => {
     expect(await readFile(path, 'utf8')).not.toContain('generatedFrom: stale')
   }, SLOW)
 
-  it('filters by --rule and --store', async () => {
+  it('filters by --rule and --store, before generating anything', async () => {
     const byRule = await run('test-pg', [], ['--rule', 'R-003', 'R-006'])
     expect(byRule.code, byRule.stderr).toBe(0)
     expect(rulesOf(byRule.stdout)).toEqual(['R-003', 'R-006'])
-    const otherStore = await run('test-pg', [], ['--store', 'firestore'])
+    // No facts file: generating a postgres file would need one.
+    const root = await copyFixture('test-pg')
+    const otherStore = await runCli(['test', '--facts', 'missing.json', '--format', 'json', '--store', 'firestore'], { cwd: root })
     expect(otherStore.code, otherStore.stderr).toBe(0)
     expect(JSON.parse(otherStore.stdout)).toEqual({ files: [], infrastructure: [], summary: { passed: 0, failed: 0, rules: 0 } })
+    expect(existsSync(join(root, '.holdline/tests'))).toBe(false)
   }, SLOW)
 
-  it('skips rules that are not approved or not enforced by test', async () => {
+  it('notes a named rule that is not enforced by test, without running it', async () => {
     const root = await copyFixture('test-pg', [['holdline.rules', /(text: Every project belongs to an org\n)/, '$1    enforce:\n      - static\n']])
     const r = await runCli(['test', '--facts', 'facts.json', '--format', 'json', '--rule', 'R-004', 'R-005'], { cwd: root })
     expect(r.code, r.stderr).toBe(0)
-    expect(rulesOf(r.stdout)).toEqual(['R-005'])
+    const files = JSON.parse(r.stdout).files
+    expect(files.map((f: { rule: string }) => f.rule)).toEqual(['R-004', 'R-005'])
+    expect(files[0]).toEqual({ rule: 'R-004', store: 'postgres', cases: [], skipped: ['not tested: rule is not enforced by test'] })
+  }, SLOW)
+
+  it('notes muted rules, rules no cases can be generated for, and orphan test files', async () => {
+    const access = [
+      '  - id: R-009', '    text: Signed-in users only', '    type: access', '    target:', '      routes: GET /x',
+      '    requires:', '      atom:', '        op: authenticated', '    enforce:', '      - test', '    status: approved',
+      '    approved:', '      by: fixture', '      at: 2026-10-21', '      hash: unstamped', '',
+    ].join('\n')
+    const root = await copyFixture('test-pg', [['holdline.rules', /^rules:\n/m, `rules:\n${access}`]])
+    execFileSync(TSX, [APPROVE_FIXTURE, join(root, 'holdline.rules')])
+    expect((await runCli(['mute', 'R-007', '--reason', 'migrating'], { cwd: root })).code).toBe(0)
+    await mkdir(join(root, '.holdline/tests'), { recursive: true })
+    const orphan = { rule: 'R-050', generatedFrom: 'h', store: 'postgres' as const, cases: [], skipped: [] }
+    await writeFile(join(root, '.holdline/tests/R-050.yaml'), serializeTestFile(orphan))
+    const r = await runCli(['test', '--facts', 'facts.json', '--format', 'json'], { cwd: root })
+    expect(r.code, r.stderr).toBe(0)
+    const files = JSON.parse(r.stdout).files as { rule: string; cases: unknown[]; skipped: string[] }[]
+    expect(files.map(f => f.rule)).toEqual(['R-009', ...ALL, 'R-050'])
+    const notes = files.filter(f => f.cases.length === 0)
+    expect(notes).toEqual([
+      { rule: 'R-009', cases: [], skipped: ['not tested: no cases can be generated for access rules'] },
+      { rule: 'R-007', store: 'postgres', cases: [], skipped: ['not tested: rule is muted'] },
+      { rule: 'R-050', store: 'postgres', cases: [], skipped: ['orphan test file: no approved rule R-050; delete .holdline/tests/R-050.yaml'] },
+    ])
   }, SLOW)
 
   it('exits 2 on an unknown rule, store or format', async () => {
@@ -144,7 +178,7 @@ describe('holdline test on postgres', () => {
     expect(r.code, r.stderr).toBe(0)
     expect(JSON.parse(r.stdout).files).toEqual([{
       rule: 'R-004', store: 'postgres', generated: 'missing', cases: [],
-      skipped: ['table public.projects is not in the facts; run holdline scan, then holdline test'],
+      skipped: ['table public.projects is not in the facts; run holdline scan, then holdline test --regenerate'],
     }])
   })
 
@@ -162,10 +196,11 @@ describe('holdline test on postgres', () => {
   })
 
   it('generates data-access allow cases that satisfy the policy in the facts', async () => {
-    // --store postgres writes the firestore files without starting the emulator.
+    // Without rules files the run stops at infrastructure, after the file is written, without an emulator.
     const root = await copyFixture('test-fb')
-    const r = await runCli(['test', '--facts', 'facts.json', '--format', 'json', '--rule', 'R-002', '--store', 'postgres'], { cwd: root })
-    expect(r.code, r.stderr).toBe(0)
+    await rm(join(root, 'firestore.rules'))
+    const r = await runCli(['test', '--facts', 'facts.json', '--format', 'json', '--rule', 'R-002'], { cwd: root })
+    expect(r.code, r.stderr).toBe(3)
     const file = parseTestFile(await readFile(join(root, '.holdline/tests/R-002.yaml'), 'utf8'))
     const data = Object.fromEntries(file.cases.map(c => [c.name, c.do.data]))
     // The create policy also checks status, so every case sends a valid one; deny cases break only the rule's atoms.
@@ -175,6 +210,24 @@ describe('holdline test on postgres', () => {
       'create: denied without incoming.orgId in doc(/users/{actor.uid}).orgIds': { orgId: 'other-value', status: 'active' },
     })
   })
+
+  it('--regenerate rebuilds a file the facts have changed for, and marks only changed files', async () => {
+    const root = await copyFixture('test-pg')
+    expect((await runCli(['approve', 'R-004'], { cwd: root })).code).toBe(0)
+    const stuck = await runCli(['test', '--facts', 'facts.json', '--format', 'json', '--rule', 'R-004'], { cwd: root })
+    expect(stuck.code, stuck.stderr).toBe(0)
+    expect(JSON.parse(stuck.stdout).files).toEqual([{
+      rule: 'R-004', store: 'postgres', cases: [],
+      skipped: ['table public.projects is not in the facts; run holdline scan, then holdline test --regenerate'],
+    }])
+    const fixed = await runCli(['test', '--regenerate', '--facts', 'facts.json', '--format', 'json', '--rule', 'R-004'], { cwd: root })
+    expect(fixed.code, fixed.stderr).toBe(0)
+    const json = JSON.parse(fixed.stdout)
+    expect(json.files.map((f: { rule: string; generated?: string; skipped: string[] }) => [f.rule, f.generated, f.skipped])).toEqual([['R-004', 'changed', []]])
+    expect(json.summary).toEqual({ passed: 2, failed: 0, rules: 1 })
+    const again = await runCli(['test', '--regenerate', '--facts', 'facts.json', '--format', 'json', '--rule', 'R-004'], { cwd: root })
+    expect(JSON.parse(again.stdout).files[0].generated).toBeUndefined()
+  }, SLOW)
 
   it('prints a human report', async () => {
     const root = await copyFixture('test-pg', [[MIGRATION, 'org_id uuid not null references public.orgs(id), owner_id', 'org_id uuid references public.orgs(id), owner_id']])

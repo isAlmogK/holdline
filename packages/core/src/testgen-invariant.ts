@@ -17,7 +17,7 @@ export function postgresInvariantCases(rule: InvariantRule & { target: { store: 
   const path = normalizeTable(rule.target.table)
   if (rule.kind === 'check') return { cases: [], skipped: ['check expressions are tested statically only'] }
   const table = facts ? new FactIndex(facts).table(path) : undefined
-  if (!table) return { cases: [], skipped: [`table ${path} is not in the facts; run holdline scan, then holdline test`] }
+  if (!table) return { cases: [], skipped: [`table ${path} is not in the facts; run holdline scan, then holdline test --regenerate`] }
   const { row, parents } = validRow(rule, table)
   const create = (name: string, data: Row, expect: 'allow' | 'reject', seed: Seed[] = parents): TestCase =>
     ({ name, as: null, seed: structuredClone(seed), do: { op: 'create', path, data: structuredClone(data) }, expect })

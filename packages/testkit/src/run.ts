@@ -6,7 +6,7 @@ import type { HoldlineConfig, TestFile } from '@holdline/core'
 import { runOnEmulator } from './emulator.js'
 import { resolveRulesFile } from './firebase-rules.js'
 import type { FirebaseInput } from './firebase-runner.js'
-import { applyMigrations } from './migrations.js'
+import { applyMigrations, type MigrationResult } from './migrations.js'
 import { prepareRoles } from './pg-actor.js'
 import { runPostgresFile, type CaseKind } from './pg-runner.js'
 import type { CaseResult, FileReport, InfraFailure, TestReport } from './report.js'
@@ -37,16 +37,26 @@ export async function runTests(root: string, config: HoldlineConfig, items: Test
   return { files, infrastructure }
 }
 
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
+
 async function runPostgres(root: string, config: HoldlineConfig, items: TestItem[], out: Map<TestItem, CaseResult[]>): Promise<string | undefined> {
   for (const item of items) {
-    const { db, dialect, files, error } = await applyMigrations(root, config)
+    let migrated: MigrationResult
+    try {
+      migrated = await applyMigrations(root, config)
+    } catch (e) {
+      return `the Postgres runner could not start: ${message(e)}`
+    }
+    const { db, dialect, files, error } = migrated
     try {
       if (files.length === 0) return NO_MIGRATIONS
       if (error) return `migration ${error.file} failed: ${error.message}`
       await prepareRoles(db, dialect)
       out.set(item, await runPostgresFile(db, item.file, item.kind, dialect))
+    } catch (e) {
+      return `the Postgres runner failed: ${message(e)}`
     } finally {
-      await db.close()
+      await db.close().catch(() => undefined)
     }
   }
   return undefined
@@ -81,6 +91,11 @@ async function runFirebase(root: string, config: HoldlineConfig, items: TestItem
     for (const store of new Set(runnable.map(i => i.file.store))) infrastructure.push({ store, message: outcome.infra })
     return infrastructure
   }
-  for (const item of runnable) out.set(item, outcome.results[item.file.rule] ?? [])
+  // A rule the worker did not answer for means the run broke: its cases did not pass or fail.
+  for (const item of runnable) {
+    const cases = outcome.results[item.file.rule]
+    if (cases) out.set(item, cases)
+    else infrastructure.push({ store: item.file.store, message: `the emulator worker returned no results for ${item.file.rule}` })
+  }
   return infrastructure
 }

@@ -6,7 +6,8 @@ import {
 import { UsageError, type Io } from '../io.js'
 import { approver, loadPending, loadRules, savePending, saveRules, testsDir, today, writeFileEnsured } from '../workspace.js'
 
-// The facts of the last scan, when there is a readable one: invariant cases need them.
+// The facts of the last scan, when there is a readable one: invariant cases need them, and data-access
+// allow cases use them to satisfy the op's policy too.
 async function cachedFacts(root: string): Promise<Facts | undefined> {
   try {
     return parseFacts(JSON.parse(await readFile(factsCachePath(root), 'utf8')))

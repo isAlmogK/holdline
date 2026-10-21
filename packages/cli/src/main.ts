@@ -36,7 +36,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
     .option('--rule <ids...>', 'only these rules')
     .option('--store <store>', 'only postgres, firestore or storage')
     .option('--format <format>', 'human or json', 'human')
-    .option('--facts <file>', 'facts for generating invariant cases, instead of scanning')
+    .option('--facts <file>', 'facts for generating test cases, instead of scanning')
+    .option('--regenerate', 'regenerate every selected test file from the current facts')
     .action((opts) => run(() => testCommand(opts, io))())
 
   program.command('explain <id>')

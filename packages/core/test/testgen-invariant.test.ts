@@ -76,8 +76,8 @@ describe('postgres invariant tests', () => {
   })
   it('skips without facts for the table', () => {
     const r = rule({ type: 'invariant', target: { store: 'postgres', table: 'nope' }, kind: 'not-null', columns: ['a'] })
-    expect(generateTests(r, vocab, facts)!.skipped).toEqual(['table public.nope is not in the facts; run holdline scan, then holdline test'])
-    expect(generateTests(r, vocab)!.skipped).toEqual(['table public.nope is not in the facts; run holdline scan, then holdline test'])
+    expect(generateTests(r, vocab, facts)!.skipped).toEqual(['table public.nope is not in the facts; run holdline scan, then holdline test --regenerate'])
+    expect(generateTests(r, vocab)!.skipped).toEqual(['table public.nope is not in the facts; run holdline scan, then holdline test --regenerate'])
   })
   it('skips storage invariants', () => {
     const r = rule({ type: 'invariant', target: { store: 'storage', path: '/f/{id}' }, kind: 'not-null', columns: ['a'] })

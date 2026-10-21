@@ -1,6 +1,10 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { generateTests, parseRulesFile, serializeTestFile, vocabularyMap } from '@holdline/core'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { announceSkip } from '../../testkit/test/helpers.js'
-import { failedCases, runTestCommand as run, type Edit } from './helpers/fixture.js'
+import { copyFixture, failedCases, runTestCommand as run, type Edit } from './helpers/fixture.js'
+import { runCli } from './helpers/project.js'
 
 type Run = Awaited<ReturnType<typeof run>>
 type Report = { files: { rule: string; cases: { passed: boolean }[] }[]; infrastructure: { store: string; message: string }[] }
@@ -50,5 +54,24 @@ describe('@emulator holdline test on firestore and storage', () => {
     const r = await red(ctx, [['firestore.rules', "\n        && request.resource.data.status in ['active', 'archived']", '']])
     expect(r.code, r.stderr).toBe(1)
     expect(failedCases(r)).toEqual([['R-004', "create: denied with status '__holdline_invalid__'"]])
+  }, EMULATOR)
+
+  it('stays red on a test file generated against older facts until --regenerate', async ctx => {
+    if (infra !== undefined) return ctx.skip(infra)
+    const root = await copyFixture('test-fb')
+    // Same rule hash, but the allow case was built without the create policy: it sends no status.
+    const file = parseRulesFile(await readFile(join(root, 'holdline.rules'), 'utf8'))
+    const stale = generateTests(file.rules.find(r => r.id === 'R-002')!, vocabularyMap(file))!
+    await mkdir(join(root, '.holdline/tests'), { recursive: true })
+    await writeFile(join(root, '.holdline/tests/R-002.yaml'), serializeTestFile(stale))
+
+    const red = await runCli(['test', '--facts', 'facts.json', '--rule', 'R-002'], { cwd: root })
+    expect(red.code, red.stderr).toBe(1)
+    expect(red.stdout).toContain('✗ create: allowed when every condition holds: expected allow, got deny')
+    expect(red.stdout).toContain('after changing policies run holdline test --regenerate')
+
+    const green = await runCli(['test', '--regenerate', '--facts', 'facts.json', '--format', 'json', '--rule', 'R-002'], { cwd: root })
+    expect(green.code, green.stdout).toBe(0)
+    expect(JSON.parse(green.stdout).files.map((f: { rule: string; generated?: string }) => [f.rule, f.generated])).toEqual([['R-002', 'changed']])
   }, EMULATOR)
 })

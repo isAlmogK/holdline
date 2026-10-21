@@ -5,6 +5,8 @@ export type TestOutput = TestReport
 // Continuation lines of emulator and database messages sit under their first line.
 const indent = (text: string) => text.replace(/\n/g, '\n    ')
 
+export const REGENERATE_HINT = 'allow cases are built from the facts when the file was generated; after changing policies run holdline test --regenerate'
+
 const GENERATED = { missing: 'generated: no test file', changed: 'regenerated: the rule changed' } as const
 
 export function summarize(out: TestOutput): { passed: number; failed: number; rules: number } {
@@ -21,10 +23,12 @@ export function formatTestReport(out: TestOutput, format: 'human' | 'json'): str
     const passed = f.cases.filter(c => c.passed).length
     const failed = f.cases.length - passed
     const counts = f.cases.length === 0 ? 'no cases' : failed > 0 ? `${passed} passed, ${failed} failed` : `${passed} passed`
-    lines.push(`${f.rule} ${f.store}: ${counts}${f.generated ? ` (${GENERATED[f.generated]})` : ''}`)
+    lines.push(`${f.rule}${f.store ? ` ${f.store}` : ''}: ${counts}${f.generated ? ` (${GENERATED[f.generated]})` : ''}`)
     for (const c of f.cases.filter(x => !x.passed)) lines.push(`  ✗ ${c.name}: ${indent(c.detail ?? `expected ${c.expect}, got ${c.actual}`)}`)
     for (const s of f.skipped) lines.push(`  - skipped: ${s}`)
   }
+  // A denied allow case is often a file generated against older policies.
+  if (out.files.some(f => f.cases.some(c => !c.passed && c.expect === 'allow' && c.actual === 'deny'))) lines.push('', REGENERATE_HINT)
   if (out.infrastructure.length > 0) {
     if (lines.length > 0) lines.push('')
     lines.push('Could not run:')

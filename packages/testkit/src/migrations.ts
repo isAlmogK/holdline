@@ -43,7 +43,12 @@ export async function applyMigrations(root: string, config: HoldlineConfig): Pro
   files.sort()
   const dialect = config.postgres?.dialect ?? (files.some(f => f.startsWith('supabase/migrations/')) ? 'supabase' : 'plain')
   const db = new PGlite()
-  if (dialect === 'supabase') await db.exec(SUPABASE_SHIM)
+  try {
+    if (dialect === 'supabase') await db.exec(SUPABASE_SHIM)
+  } catch (e) {
+    await db.close().catch(() => undefined)
+    throw e
+  }
   for (const file of files) {
     try {
       const sql = await readFile(join(root, file), 'utf8')

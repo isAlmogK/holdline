@@ -33,6 +33,32 @@ describe('formatTestReport', () => {
     ].join('\n'))
   })
 
+  it('hints at --regenerate when an allow case is denied, and prints a note without a store', () => {
+    const out = formatTestReport({
+      files: [
+        { rule: 'R-001', store: 'firestore', skipped: [], cases: [{ name: 'create: allowed', expect: 'allow', actual: 'deny', passed: false, detail: 'expected allow, got deny' }] },
+        { rule: 'R-009', cases: [], skipped: ['not tested: no cases can be generated for access rules'] },
+      ],
+      infrastructure: [],
+    }, 'human')
+    expect(out).toBe([
+      'R-001 firestore: 0 passed, 1 failed',
+      '  ✗ create: allowed: expected allow, got deny',
+      'R-009: no cases',
+      '  - skipped: not tested: no cases can be generated for access rules',
+      '',
+      'allow cases are built from the facts when the file was generated; after changing policies run holdline test --regenerate',
+      '',
+      '0 passed, 1 failed in 2 rules',
+      '',
+    ].join('\n'))
+  })
+
+  it('gives no hint for other failures', () => {
+    const out = formatTestReport({ files: [{ rule: 'R-001', store: 'postgres', skipped: [], cases: [{ name: 'deny', expect: 'deny', actual: 'allow', passed: false }] }], infrastructure: [] }, 'human')
+    expect(out).not.toContain('--regenerate')
+  })
+
   it('prints only the summary when nothing ran', () => {
     expect(formatTestReport({ files: [], infrastructure: [] }, 'human')).toBe('0 passed, 0 failed in 0 rules\n')
   })
