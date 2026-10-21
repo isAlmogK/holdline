@@ -127,8 +127,13 @@ describe('exists never uses a placeholder that anonymous callers have', () => {
     const sql = `EXISTS (SELECT 1 FROM role_perms rp WHERE rp.role = ${operand})`
     expect(norm(sql)).toEqual({ opaque: sql })
   })
-  it('keeps other claims', () => {
-    expect(norm("EXISTS (SELECT 1 FROM role_perms rp WHERE rp.role = (auth.jwt() ->> 'tenant'::text))"))
-      .toEqual(exists('pg:public.role_perms?role={actor.claim.tenant}'))
+  // A claim is compared as text in SQL (`->>`), but its JSON value may be a number or a boolean.
+  it('makes other claims opaque too', () => {
+    const sql = "EXISTS (SELECT 1 FROM role_perms rp WHERE rp.role = (auth.jwt() ->> 'tenant'::text))"
+    expect(norm(sql)).toEqual({ opaque: sql })
+    expect(norm("((auth.jwt() ->> 'tenant'::text) IN ( SELECT rp.role FROM role_perms rp))")).toHaveProperty('opaque')
+  })
+  it('keeps actor.uid', () => {
+    expect(norm('EXISTS (SELECT 1 FROM memberships m WHERE m.user_id = auth.uid())')).toEqual(exists('pg:public.memberships?user_id={actor.uid}'))
   })
 })

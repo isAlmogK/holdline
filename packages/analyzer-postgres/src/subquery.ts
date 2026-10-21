@@ -7,6 +7,12 @@ import { constant, kindOf, nameList, type SqlNode } from './sql-ast.js'
 
 const AMBIGUOUS = /[&=?{}]/ // would make the doc ambiguous
 
+// An outer operand an exists doc can hold. Not a claim: SQL compares its text (`->>`) with the column, while its
+// JSON value may be a number or a boolean. Not the role or an anon-key claim: an exists doc with {actor.…} is false
+// for anonymous callers, but those are set for them (role 'anon', the key's claims).
+const placeholder = (o: unknown): o is string =>
+  typeof o === 'string' && (o === 'actor.uid' || !o.startsWith('actor.')) && !isAnonKeyOperand(o)
+
 interface Query { table: string; scope: Scope; select: SqlNode; conditions: [string, string][] }
 
 // EXISTS (SELECT … FROM t WHERE t.a = <x> AND t.b = <y>) → exists(pg:<schema>.t?a={x}&b={y}).
@@ -24,7 +30,7 @@ export function inSubquery(sublink: SqlNode, env: NormalizeEnv): Expr | undefine
   if (!env.positive) return undefined
   const left = operand(sublink.testexpr, env)
   const q = singleTableQuery(sublink.subselect, env)
-  if (typeof left !== 'string' || isAnonKeyOperand(left) || !q) return undefined
+  if (!placeholder(left) || !q) return undefined
   const targets = (q.select.targetList as SqlNode[] | undefined) ?? []
   const col = targets.length === 1 ? innerColumn(targets[0]!.ResTarget?.val, q.scope) : undefined
   return col === undefined ? undefined : existsAtom(q.table, [...q.conditions, [col, left]])
@@ -80,8 +86,7 @@ function equality(node: SqlNode, env: NormalizeEnv): [string, string] | undefine
     if (col === undefined) continue
     if (innerColumn(b, env.scope) !== undefined) return undefined
     const o = operand(b, env)
-    // An exists doc with {actor.…} is false for anonymous callers, but these are set for them (role 'anon', the key's claims).
-    return typeof o === 'string' && !isAnonKeyOperand(o) ? [col, o] : undefined
+    return placeholder(o) ? [col, o] : undefined
   }
   return undefined
 }

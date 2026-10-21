@@ -16,9 +16,11 @@ const NUMBER_LIKE = /^\s*[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/
 const literal = (o: Operand): Literal | undefined => (typeof o === 'object' ? o.literal : undefined)
 const isRole = (o: Operand) => o === 'actor.role' || o === 'actor.claim.role'
 const isClaim = (o: Operand) => typeof o === 'string' && o.startsWith('actor.claim.')
-// `->>` yields text, but the claim's JSON value may be a boolean, a number or null.
+const JSON_TEXT = /^\s*[{["]/
+// `->>` yields text, but the claim's JSON value may be a boolean, a number or null, and an object, an array or a
+// JSON string nested in it comes back as its JSON text (`{}`, `["a"]`, `"x"`).
 const plainString = (v: Literal | undefined): v is string =>
-  typeof v === 'string' && v !== 'true' && v !== 'false' && v !== 'null' && !NUMBER_LIKE.test(v)
+  typeof v === 'string' && v !== 'true' && v !== 'false' && v !== 'null' && !NUMBER_LIKE.test(v) && !JSON_TEXT.test(v)
 
 // The atom for a comparison, or undefined when it can't be stated exactly (the caller makes it opaque).
 // A result may allow more than the SQL, never less.

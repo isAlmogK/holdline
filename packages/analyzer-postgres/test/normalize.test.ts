@@ -108,6 +108,11 @@ describe('normalizeCondition: soundness', () => {
     opaque("((auth.jwt() ->> 'tier'::text) = ANY (ARRAY['a'::text, '1.5'::text]))")
     opaque("((auth.jwt() ->> 'tier'::text) > 'a'::text)")
     opaque("((auth.jwt() ->> 'tier'::text) = status)")
+    // `->>` on a JSON object, array or string-in-JSON gives its JSON text
+    opaque("((auth.jwt() ->> 'app_metadata'::text) = '{}'::text)")
+    opaque("((auth.jwt() ->> 'groups'::text) = ' [\"a\"]'::text)")
+    opaque("((auth.jwt() ->> 'tier'::text) = '\"gold\"'::text)")
+    opaque("((auth.jwt() ->> 'tier'::text) = ANY (ARRAY['gold'::text, '{}'::text]))")
     expect(norm("((auth.jwt() ->> 'user_role'::text) = 'admin'::text)"))
       .toEqual(atom({ op: 'eq', left: 'actor.claim.user_role', right: { literal: 'admin' } }))
     expect(norm("(((auth.jwt() ->> 'user_role'::text))::text = 'admin'::text)"))
