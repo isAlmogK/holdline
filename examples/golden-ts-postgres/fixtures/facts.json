@@ -21,7 +21,11 @@
     { "id": "ts:src/repositories/teams#TeamRepository.list", "kind": "method", "lang": "ts", "location": { "file": "src/repositories/teams.ts", "line": 4 } },
     { "id": "ts:src/repositories/teams#TeamRepository.softDelete", "kind": "method", "lang": "ts", "location": { "file": "src/repositories/teams.ts", "line": 8 } },
     { "id": "ts:src/repositories/users#UserRepository.list", "kind": "method", "lang": "ts", "location": { "file": "src/repositories/users.ts", "line": 4 } },
-    { "id": "ts:src/services/transfer#TransferService.transfer", "kind": "method", "lang": "ts", "location": { "file": "src/services/transfer.ts", "line": 5 } }
+    { "id": "ts:src/services/transfer#TransferService.transfer", "kind": "method", "lang": "ts", "location": { "file": "src/services/transfer.ts", "line": 5 } },
+    { "id": "ts:src/repositories/teams#TeamRepository", "kind": "class", "lang": "ts", "location": { "file": "src/repositories/teams.ts", "line": 3 } },
+    { "id": "ts:src/repositories/users#UserRepository", "kind": "class", "lang": "ts", "location": { "file": "src/repositories/users.ts", "line": 3 } },
+    { "id": "ts:src/services/transfer#TransferService", "kind": "class", "lang": "ts", "location": { "file": "src/services/transfer.ts", "line": 4 } },
+    { "id": "ts:src/middleware/auth#actorOf", "kind": "function", "lang": "ts", "location": { "file": "src/middleware/auth.ts", "line": 19 } }
   ],
   "routes": [
     { "id": "route:GET /dogs", "method": "GET", "path": "/dogs", "handler": "ts:src/routes/dogs#listDogs", "middleware": ["ts:src/middleware/auth#requireAuth"], "framework": "express" },
@@ -42,13 +46,13 @@
     { "at": "route:GET /admin/users", "requires": { "atom": { "op": "in", "left": "actor.role", "right": { "literal": ["admin"] } } }, "evidence": { "file": "src/routes/admin.ts", "line": 7 } }
   ],
   "dataOps": [
-    { "in": "ts:src/repositories/dogs#DogRepository.list", "store": "postgres", "target": "public.dogs", "op": "list", "filters": { "and": [{ "atom": { "op": "eq", "left": "resource.team_id", "right": "actor.claim.team_id" } }, { "atom": { "op": "isNull", "operand": "resource.deleted_at" } }] }, "evidence": { "file": "src/repositories/dogs.ts", "line": 5 } },
+    { "in": "ts:src/repositories/dogs#DogRepository.list", "store": "postgres", "target": "public.dogs", "op": "list", "filters": { "and": [{ "atom": { "op": "eq", "left": "resource.team_id", "right": "param.teamId" } }, { "atom": { "op": "isNull", "operand": "resource.deleted_at" } }] }, "evidence": { "file": "src/repositories/dogs.ts", "line": 5 } },
     { "in": "ts:src/repositories/dogs#DogRepository.findById", "store": "postgres", "target": "public.dogs", "op": "read", "filters": { "and": [{ "atom": { "op": "eq", "left": "resource.id", "right": "param.id" } }, { "atom": { "op": "isNull", "operand": "resource.deleted_at" } }] }, "evidence": { "file": "src/repositories/dogs.ts", "line": 9 } },
     { "in": "ts:src/repositories/dogs#DogRepository.create", "store": "postgres", "target": "public.dogs", "op": "create", "evidence": { "file": "src/repositories/dogs.ts", "line": 13 } },
-    { "in": "ts:src/repositories/dogs#DogRepository.update", "store": "postgres", "target": "public.dogs", "op": "update", "evidence": { "file": "src/repositories/dogs.ts", "line": 17 } },
-    { "in": "ts:src/repositories/dogs#DogRepository.softDelete", "store": "postgres", "target": "public.dogs", "op": "update", "evidence": { "file": "src/repositories/dogs.ts", "line": 21 } },
+    { "in": "ts:src/repositories/dogs#DogRepository.update", "store": "postgres", "target": "public.dogs", "op": "update", "filters": { "atom": { "op": "eq", "left": "resource.id", "right": "param.id" } }, "evidence": { "file": "src/repositories/dogs.ts", "line": 17 } },
+    { "in": "ts:src/repositories/dogs#DogRepository.softDelete", "store": "postgres", "target": "public.dogs", "op": "update", "filters": { "atom": { "op": "eq", "left": "resource.id", "right": "param.id" } }, "evidence": { "file": "src/repositories/dogs.ts", "line": 21 } },
     { "in": "ts:src/repositories/teams#TeamRepository.list", "store": "postgres", "target": "public.teams", "op": "list", "filters": { "atom": { "op": "isNull", "operand": "resource.deleted_at" } }, "evidence": { "file": "src/repositories/teams.ts", "line": 5 } },
-    { "in": "ts:src/repositories/teams#TeamRepository.softDelete", "store": "postgres", "target": "public.teams", "op": "update", "evidence": { "file": "src/repositories/teams.ts", "line": 9 } },
+    { "in": "ts:src/repositories/teams#TeamRepository.softDelete", "store": "postgres", "target": "public.teams", "op": "update", "filters": { "atom": { "op": "eq", "left": "resource.id", "right": "param.id" } }, "evidence": { "file": "src/repositories/teams.ts", "line": 9 } },
     { "in": "ts:src/repositories/users#UserRepository.list", "store": "postgres", "target": "public.users", "op": "list", "evidence": { "file": "src/repositories/users.ts", "line": 5 } },
     { "in": "ts:src/services/transfer#TransferService.transfer", "store": "postgres", "target": "public.transfers", "op": "create", "evidence": { "file": "src/services/transfer.ts", "line": 9 } }
   ],
@@ -62,7 +66,10 @@
     ["ts:src/routes/dogs#deleteDog", "ts:src/repositories/dogs#DogRepository.softDelete"],
     ["ts:src/routes/teams#listTeams", "ts:src/repositories/teams#TeamRepository.list"],
     ["ts:src/routes/teams#deleteTeam", "ts:src/repositories/teams#TeamRepository.softDelete"],
-    ["ts:src/routes/admin#listUsers", "ts:src/repositories/users#UserRepository.list"]
+    ["ts:src/routes/admin#listUsers", "ts:src/repositories/users#UserRepository.list"],
+    ["ts:src/routes/dogs#listDogs", "ts:src/middleware/auth#actorOf"],
+    ["ts:src/routes/dogs#createDog", "ts:src/middleware/auth#actorOf"],
+    ["ts:src/routes/dogs#transferDog", "ts:src/middleware/auth#actorOf"]
   ],
   "tables": [
     { "id": "pg:public.users", "name": "public.users", "columns": [
