@@ -306,8 +306,8 @@ describe('expression parser', () => {
   })
   it('reports errors with line and column', () => {
     expect(() => p('a ==')).toThrow(ParseError)
-    try { p('a &&\n  )') } catch (e) { expect(e).toMatchObject({ line: 2, col: 3 }) }
-    try { p('f(a b)') } catch (e) { expect(e).toMatchObject({ line: 1, col: 5, message: expect.stringContaining("expected ')'") }) }
+    expect(() => p('a &&\n  )')).toThrow(expect.objectContaining({ line: 2, col: 3 }))
+    expect(() => p('f(a b)')).toThrow(expect.objectContaining({ line: 1, col: 5, message: expect.stringContaining("expected ')'") }))
   })
 })
 ```
