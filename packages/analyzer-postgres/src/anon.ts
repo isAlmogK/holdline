@@ -1,12 +1,10 @@
 import type { Expr, Operand } from '@holdline/core'
+import { isAnonKeyOperand } from './atoms.js'
 
 export type Tri = 'T' | 'F' | '?'
 
-// Claims Supabase also puts in the anon key's token, so they are not null for anonymous callers.
-const ANON_CLAIMS = ['role', 'iss', 'ref', 'aud', 'iat', 'exp'].map(c => `actor.claim.${c}`)
-
 const actorDependent = (o: Operand) => typeof o === 'string'
-  && !ANON_CLAIMS.some(c => o === c || o.startsWith(`${c}.`))
+  && !isAnonKeyOperand(o) // set for anonymous callers too
   && (o.startsWith('actor.') || (o.startsWith('doc(') && o.includes('{actor.')))
 
 // The condition's value for an anonymous caller: auth.uid() and auth.jwt() are null, and a comparison
@@ -26,5 +24,6 @@ export function forAnonymous(e: Expr): Tri {
 // Analyzers state sign-in explicitly (facts.md): a policy no anonymous caller can satisfy requires it.
 export function requireSignIn(e: Expr): Expr {
   if (forAnonymous(e) !== 'F') return e
+  if ('and' in e && e.and.some(c => 'atom' in c && c.atom.op === 'authenticated')) return e
   return { and: [{ atom: { op: 'authenticated' } }, ...('and' in e ? e.and : [e])] }
 }

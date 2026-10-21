@@ -30,7 +30,7 @@ describe('forAnonymous and requireSignIn', () => {
 })
 
 // A fake normalizer: the SQL text names the Expr.
-const EXPRS: Record<string, Expr> = { owner: OWNER, true: { and: [] }, live: { atom: { op: 'isNull', operand: 'resource.deleted_at' } } }
+const EXPRS: Record<string, Expr> = { draft: eq('resource.status', 'draft'), submitted: eq('resource.status', 'submitted'), owner: OWNER, true: { and: [] }, live: { atom: { op: 'isNull', operand: 'resource.deleted_at' } } }
 const condition: ConditionOf = (sql, _table, side) => {
   const e = EXPRS[sql]!
   return { expr: side === 'incoming' ? JSON.parse(JSON.stringify(e).replaceAll('resource.', 'incoming.')) : e, functions: sql === 'owner' ? ['public.f'] : [] }
@@ -96,5 +96,27 @@ describe('buildPolicies', () => {
     ], 'plain', condition, at)
     expect(policies.map(p => p.condition)).toEqual([{ and: [] }, { and: [] }])
     expect(diagnostics).toEqual([])
+  })
+  it('ORs the WITH CHECK clauses of all permissive update policies', () => {
+    const { policies } = buildPolicies([
+      row({ name: 'A', cmd: 'w', using: 'owner', check: 'draft' }),
+      row({ name: 'B', cmd: 'w', using: 'submitted', check: 'submitted' }),
+    ], 'plain', condition, at)
+    const checks = { or: [eq('incoming.status', 'draft'), eq('incoming.status', 'submitted')] }
+    expect(policies.map(p => p.condition)).toEqual([
+      { and: [AUTH, OWNER, checks] },
+      { and: [EXPRS.submitted, checks] },
+    ])
+  })
+  it('wraps each policy for the callers its roles cover', () => {
+    const signed = buildPolicies([row({ roles: ['authenticated'], using: 'true' })], 'supabase', condition, at).policies
+    expect(signed[0]!.condition).toEqual({ and: [AUTH, { and: [] }] })
+    const { policies } = buildPolicies([
+      row({ name: 'anon all', roles: ['anon'], using: 'true' }),
+      row({ name: 'auth only', roles: ['authenticated'], permissive: false, using: 'owner' }),
+    ], 'supabase', condition, at)
+    // the restriction binds signed-in callers only, so anonymous reads stay possible
+    expect(policies[0]!.condition).toEqual({ and: [{ and: [{ not: AUTH }, { and: [] }] }, { or: [{ not: AUTH }, OWNER] }] })
+    expect(forAnonymous(policies[0]!.condition)).not.toBe('F')
   })
 })

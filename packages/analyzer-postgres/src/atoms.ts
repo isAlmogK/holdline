@@ -5,7 +5,12 @@ export const SIGNED_IN: Expr = { atom: { op: 'authenticated' } }
 type Comparison = Extract<Atom, { left: Operand }>
 
 // An anonymous caller is "no actor" in the facts, yet in Supabase it carries these claims and role 'anon'.
-const ANON_CLAIMS = new Set(['iss', 'ref', 'aud', 'iat', 'exp'])
+// The claims in the anon key's token (shared with anon.ts and subquery.ts).
+export const ANON_KEY_CLAIMS = ['role', 'iss', 'ref', 'aud', 'iat', 'exp']
+// True for actor.role and actor.claim.<k>[.…] with k in ANON_KEY_CLAIMS: not null for an anonymous caller.
+export const isAnonKeyOperand = (o: Operand) => typeof o === 'string'
+  && (o === 'actor.role' || (o.startsWith('actor.claim.') && ANON_KEY_CLAIMS.includes(o.split('.')[2]!)))
+const ANON_CLAIMS = new Set(ANON_KEY_CLAIMS.filter(c => c !== 'role')) // role has its own rules below
 const NUMBER_LIKE = /^\s*[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/
 
 const literal = (o: Operand): Literal | undefined => (typeof o === 'object' ? o.literal : undefined)

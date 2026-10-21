@@ -11,25 +11,43 @@ const OPS: Record<PolicyRow['cmd'], Op[]> = {
   r: ['read', 'list'], a: ['create'], w: ['update'], d: ['delete'], '*': ['read', 'list', 'create', 'update', 'delete'],
 }
 const SIGNED_IN: Expr = { atom: { op: 'authenticated' } }
+const ANONYMOUS: Expr = { not: SIGNED_IN }
 const TRUE_ = (): Normalized => ({ expr: { and: [] }, functions: [] })
 
-type Applies = 'everyone' | 'anonymous' | 'skipped' | 'some-role'
+// Which modeled callers a policy's roles cover. Plain: any role other than public may be the caller's ('some').
+type Cover = 'both' | 'signed-in' | 'anonymous' | 'some' | 'none'
 
-function appliesTo(roles: readonly string[], dialect: Dialect): Applies {
-  if (roles.includes('public')) return 'everyone'
-  if (dialect === 'plain') return 'some-role'
-  if (roles.includes('authenticated')) return 'everyone'
-  return roles.includes('anon') ? 'anonymous' : 'skipped'
+function coverOf(roles: readonly string[], dialect: Dialect): Cover {
+  if (roles.includes('public')) return 'both'
+  if (dialect === 'plain') return 'some'
+  const [signed, anon] = [roles.includes('authenticated'), roles.includes('anon')]
+  return signed && anon ? 'both' : signed ? 'signed-in' : anon ? 'anonymous' : 'none'
 }
 
-// SELECT and DELETE use USING, INSERT uses WITH CHECK, UPDATE both; WITH CHECK defaults to USING.
-function opCondition(row: PolicyRow, op: Op, condition: ConditionOf): Normalized {
+// A permissive condition holds for the callers its roles cover; a signed-in caller has the authenticated role.
+function wrapPermissive(c: Expr, cover: Cover): Expr {
+  return cover === 'signed-in' ? { and: [SIGNED_IN, c] } : cover === 'anonymous' ? { and: [ANONYMOUS, c] } : c
+}
+// A restrictive condition binds only the callers its roles cover; dropping one only weakens.
+function wrapRestrictive(c: Expr, cover: Cover): Expr | undefined {
+  if (cover === 'both') return c
+  return cover === 'signed-in' ? { or: [ANONYMOUS, c] } : cover === 'anonymous' ? { or: [SIGNED_IN, c] } : undefined
+}
+
+// USING applies to the existing row, WITH CHECK (defaulting to USING) to the incoming one.
+function clauses(row: PolicyRow, condition: ConditionOf) {
   const table = `${row.schema}.${row.table}`
-  const using = () => (row.using === null ? TRUE_() : condition(row.using, table, 'resource'))
-  const check = () => {
-    const sql = row.check ?? row.using
-    return sql === null ? TRUE_() : condition(sql, table, 'incoming')
+  return {
+    using: (): Normalized => (row.using === null ? TRUE_() : condition(row.using, table, 'resource')),
+    check: (): Normalized => {
+      const sql = row.check ?? row.using
+      return sql === null ? TRUE_() : condition(sql, table, 'incoming')
+    },
   }
+}
+
+function opCondition(row: PolicyRow, op: Op, condition: ConditionOf): Normalized {
+  const { using, check } = clauses(row, condition)
   if (op === 'create') return check()
   if (op !== 'update') return using()
   const [u, c] = [using(), check()]
@@ -43,34 +61,53 @@ export function buildPolicies(
   location: (row: PolicyRow) => Location | undefined,
 ): { policies: Policy[]; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = []
-  const applies = (row: PolicyRow): Applies => {
-    const a = appliesTo(row.roles, dialect)
-    if (a === 'skipped') {
+  const coverage = new Map<PolicyRow, Cover>()
+  for (const row of rows) {
+    const cover = coverOf(row.roles, dialect)
+    coverage.set(row, cover)
+    if (cover === 'none') {
       diagnostics.push({
         analyzer: 'postgres', file: location(row)?.file ?? '', severity: 'warning',
         message: `policy "${row.name}" on ${row.schema}.${row.table} applies only to roles ${row.roles.join(', ')}; Holdline models the anon and authenticated roles, so it was skipped`,
       })
     }
-    return a
   }
+  const tableOf = (row: PolicyRow) => `${row.schema}.${row.table}`
+  const permissive = rows.filter(r => r.permissive && coverage.get(r) !== 'none')
+
   const restrictions = new Map<string, Normalized[]>()
   for (const row of rows.filter(r => !r.permissive)) {
-    const a = applies(row)
-    if (a !== 'everyone' && a !== 'anonymous') continue
     for (const op of OPS[row.cmd]) {
       const c = opCondition(row, op, condition)
-      const key = `${row.schema}.${row.table}#${op}`
-      restrictions.set(key, [...(restrictions.get(key) ?? []), { ...c, expr: a === 'anonymous' ? { or: [SIGNED_IN, c.expr] } : c.expr }])
+      const expr = wrapRestrictive(c.expr, coverage.get(row)!)
+      if (expr === undefined) continue
+      const key = `${tableOf(row)}#${op}`
+      restrictions.set(key, [...(restrictions.get(key) ?? []), { ...c, expr }])
     }
   }
+
+  // Postgres ORs the WITH CHECK clauses of all permissive UPDATE policies apart from their USING clauses.
+  const updateChecks = new Map<string, Normalized[]>()
+  for (const row of permissive.filter(r => OPS[r.cmd].includes('update'))) {
+    const c = clauses(row, condition).check()
+    updateChecks.set(tableOf(row), [...(updateChecks.get(tableOf(row)) ?? []), { ...c, expr: wrapPermissive(c.expr, coverage.get(row)!) }])
+  }
+
   const policies: Policy[] = []
-  for (const row of rows.filter(r => r.permissive)) {
-    const a = applies(row)
-    if (a === 'skipped') continue
-    const table = `${row.schema}.${row.table}`
+  for (const row of permissive) {
+    const table = tableOf(row)
+    const cover = coverage.get(row)!
     for (const op of OPS[row.cmd]) {
-      const c = opCondition(row, op, condition)
-      const base = a === 'anonymous' ? { and: [{ not: SIGNED_IN }, c.expr] } : c.expr
+      let own: Normalized
+      if (op === 'update') {
+        const u = clauses(row, condition).using()
+        const checks = updateChecks.get(table)!
+        const check: Expr = checks.length === 1 ? checks[0]!.expr : { or: checks.map(x => x.expr) }
+        own = { expr: { and: [wrapPermissive(u.expr, cover), check] }, functions: [...u.functions, ...checks.flatMap(x => x.functions)] }
+      } else {
+        const c = opCondition(row, op, condition)
+        own = { ...c, expr: wrapPermissive(c.expr, cover) }
+      }
       const extra = restrictions.get(`${table}#${op}`) ?? []
       const evidence = location(row)
       policies.push({
@@ -78,8 +115,8 @@ export function buildPolicies(
         store: 'pg-rls',
         target: table,
         ops: [op],
-        condition: requireSignIn(extra.length > 0 ? { and: [base, ...extra.map(x => x.expr)] } : base),
-        functions: [...new Set([...c.functions, ...extra.flatMap(x => x.functions)])].sort(),
+        condition: requireSignIn(extra.length > 0 ? { and: [own.expr, ...extra.map(x => x.expr)] } : own.expr),
+        functions: [...new Set([...own.functions, ...extra.flatMap(x => x.functions)])].sort(),
         ...(evidence ? { evidence } : {}),
       })
     }

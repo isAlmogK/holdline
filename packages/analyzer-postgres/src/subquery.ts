@@ -1,4 +1,5 @@
 import type { Expr } from '@holdline/core'
+import { isAnonKeyOperand } from './atoms.js'
 import type { NormalizeEnv } from './normalize.js'
 import { operand } from './operand.js'
 import { subqueryScope, type Scope } from './scope.js'
@@ -23,7 +24,7 @@ export function inSubquery(sublink: SqlNode, env: NormalizeEnv): Expr | undefine
   if (!env.positive) return undefined
   const left = operand(sublink.testexpr, env)
   const q = singleTableQuery(sublink.subselect, env)
-  if (typeof left !== 'string' || !q) return undefined
+  if (typeof left !== 'string' || isAnonKeyOperand(left) || !q) return undefined
   const targets = (q.select.targetList as SqlNode[] | undefined) ?? []
   const col = targets.length === 1 ? innerColumn(targets[0]!.ResTarget?.val, q.scope) : undefined
   return col === undefined ? undefined : existsAtom(q.table, [...q.conditions, [col, left]])
@@ -79,7 +80,8 @@ function equality(node: SqlNode, env: NormalizeEnv): [string, string] | undefine
     if (col === undefined) continue
     if (innerColumn(b, env.scope) !== undefined) return undefined
     const o = operand(b, env)
-    return typeof o === 'string' ? [col, o] : undefined
+    // An exists doc with {actor.…} is false for anonymous callers, but these are set for them (role 'anon', the key's claims).
+    return typeof o === 'string' && !isAnonKeyOperand(o) ? [col, o] : undefined
   }
   return undefined
 }

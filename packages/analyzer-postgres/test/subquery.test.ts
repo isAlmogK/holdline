@@ -14,6 +14,7 @@ const catalog: CatalogIndex = {
   relations: new Map([
     ['public.projects', new Set(['id', 'org_id', 'owner_id', 'status'])],
     ['public.memberships', new Set(['org_id', 'user_id', 'role'])],
+    ['public.role_perms', new Set(['role', 'perm'])],
   ]),
   functions: new Map([
     fn('is_member', ['o'], ' select exists (select 1 from public.memberships m where m.org_id = o and m.user_id = (select auth.uid())) '),
@@ -116,5 +117,18 @@ describe('helper functions', () => {
     expect(norm('empty_path_member(org_id)')).toHaveProperty('opaque')
     expect(norm('lower(org_id)')).toHaveProperty('opaque') // pg_catalog.lower wins over public.lower
     expect(norm('public.lower(org_id)')).toEqual({ and: [] })
+  })
+})
+
+describe('exists never uses a placeholder that anonymous callers have', () => {
+  it.each([
+    "(auth.jwt() ->> 'role'::text)", 'auth.role()', "(auth.jwt() ->> 'iss'::text)",
+  ])('makes %s opaque', operand => {
+    const sql = `EXISTS (SELECT 1 FROM role_perms rp WHERE rp.role = ${operand})`
+    expect(norm(sql)).toEqual({ opaque: sql })
+  })
+  it('keeps other claims', () => {
+    expect(norm("EXISTS (SELECT 1 FROM role_perms rp WHERE rp.role = (auth.jwt() ->> 'tenant'::text))"))
+      .toEqual(exists('pg:public.role_perms?role={actor.claim.tenant}'))
   })
 })
