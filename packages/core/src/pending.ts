@@ -29,9 +29,17 @@ export function emptyPending(): PendingFile {
   return { version: 1, vocabulary: [], rules: [] }
 }
 
-export function parsePendingFile(text: string): PendingFile {
-  const parsed = PendingFileSchema.safeParse(YAML.parse(text) ?? { version: 1 })
-  if (!parsed.success) throw new Error(`.holdline/pending.yaml: ${z.prettifyError(parsed.error)}`)
+export class PendingFileError extends Error {}
+
+export function parsePendingFile(text: string, source = '.holdline/pending.yaml'): PendingFile {
+  let raw: unknown
+  try {
+    raw = YAML.parse(text)
+  } catch (e) {
+    throw new PendingFileError(`${source}: invalid YAML: ${(e as Error).message}`)
+  }
+  const parsed = PendingFileSchema.safeParse(raw ?? { version: 1 })
+  if (!parsed.success) throw new PendingFileError(`${source}: ${z.prettifyError(parsed.error)}`)
   return parsed.data
 }
 

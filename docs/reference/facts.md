@@ -118,7 +118,7 @@ A condition that must hold for code at `at` to run.
 | Field | Type | Notes |
 |---|---|---|
 | `analyzer` | string | |
-| `file` | string | `''` means the whole analyzer failed (see "Analyzer contract") |
+| `file` | string | `''` means the whole analyzer failed (see "Analyzer contract"); `holdline check` then prints its results and exits 3 |
 | `message` | string | |
 | `severity` | `error` `warning` | Only `error` makes rules `unknown` |
 
@@ -330,7 +330,8 @@ part with one diagnostic `{ analyzer, file: '', severity: 'error', message }`:
 Analyzers whose `detect` returns false are skipped and not listed in `ran`. For problems with a single file, an
 analyzer should emit a diagnostic with that file's path and keep going. Today any error diagnostic makes every
 set-quantified rule `unknown`, and a `symbol`-target access rule only when the error is in its own file or its
-evidence's files (see "Diagnostics and `unknown`").
+evidence's files (see "Diagnostics and `unknown`"). An analyzer crash (`file: ''`) also makes `holdline check` exit 3
+after printing its results (see rules-file.md "`holdline check` and exit codes").
 
 ## Conventions for fixtures and analyzers
 
