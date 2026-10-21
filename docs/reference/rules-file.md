@@ -71,7 +71,9 @@ cases only for `data-access` rules.
 ## Rule types and their static checks
 
 Every check returns `stale` (the target is not in the facts) or a list of violations. A violation carries
-`message`, `at` (symbol, file, line), `unproven` (the part of the requirement that was not proven) and `fix`.
+`message` and `fix`, and optionally `at` (symbol, file, line; absent when there is nothing to point at, such as a
+Firestore invariant kind the store does not support) and `unproven` (the part of the requirement that was not proven;
+only checks that prove an implication set it).
 
 ### access
 
@@ -394,7 +396,7 @@ that atom (`deny`), named `<op>: denied without <atom>`.
 | Values made up to make two operands equal | `value-1`, `value-2`, ... |
 | Postgres paths | `public.<table>` when the name has no schema |
 | `list` on Firestore and Storage | `do.path` is the parent path of the document path |
-| Seed for create | None: the record does not exist yet. Other ops seed the record |
+| Seed for create | Not the record itself (it does not exist yet), but still every `exists` document the case needs. Other ops seed the record and those documents |
 | Data | `create` and `update` carry the record fields plus `incoming.*` values |
 
 How each atom is satisfied and then broken:
@@ -440,7 +442,7 @@ rules pass on the clean facts and that each breakage produces a violation only f
 
 | Rule | Type | What it shows |
 |---|---|---|
-| R-001 to R-003 | access | Route selectors: exact, `*` segment in `/dogs/*/transfer`, `* /admin/**` |
+| R-001 to R-003 | access | Route selectors, in order: a `*` segment in `POST /dogs/*/transfer`, exact `POST /dogs`, `* /admin/**` |
 | R-004 | access | `authenticated` proven through middleware, with a `* /dogs/**` selector |
 | R-005, R-006 | visibility | `isNull` filter on every read and list |
 | R-007, R-008 | flow | `via` a method, `via` a class (covers its members) |
