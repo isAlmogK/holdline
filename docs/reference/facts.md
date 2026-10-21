@@ -246,7 +246,7 @@ Functions in `paths.ts`:
 | Function | Behavior |
 |---|---|
 | `patternsOverlap(a, b)` | True if some concrete path matches both. A rest segment on either side overlaps everything that remains |
-| `alignParams(from, to)` | Maps parameter names position by position until a rest segment (`from` `{accountId}` to `to` `{id}` gives `accountId` to `id`). Used to rename `param.*` in a policy's condition into the rule target's names |
+| `alignParams(from, to)` | Maps parameter names position by position until a rest segment (`from` `{accountId}` to `to` `{id}` gives `accountId` to `id`). Used to rename `param.*` in a policy's condition into the rule target's names (`data-access` renames the params it does not align to fresh `__p<n>` names) |
 | `concretize(path, value)` | Fills parameters (rest segments too) with `value(name)` |
 | `normalizeTable(name)` | Adds `public.` when the name has no dot |
 

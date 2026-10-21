@@ -27,7 +27,7 @@ export function checkDataAccess(rule: DataAccess, { index, vocab }: CheckContext
   const violations = rule.ops.flatMap((op): Violation[] => {
     const conditions = index.policies(t, op).map(p => ({
       policy: p,
-      condition: t.store === 'postgres' ? p.condition : renameParams(p.condition, alignParams(p.target, t.path)),
+      condition: t.store === 'postgres' ? p.condition : renameParams(p.condition, alignParams(p.target, t.path), { fresh: true }),
     }))
     const result = implies({ or: conditions.map(c => c.condition) } satisfies Expr, rule.requires, vocab)
     if (result.ok) return []

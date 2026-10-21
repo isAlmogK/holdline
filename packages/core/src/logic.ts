@@ -119,12 +119,23 @@ function atoms(expr: Expr): Atom[] {
   return []
 }
 
-export function renameParams(expr: Expr, names: ReadonlyMap<string, string>): Expr {
-  if (names.size === 0) return expr
+// Renames `param.<name>` operands and `{param.<name>}` doc placeholders through `names`.
+// With `fresh`, a param that `names` does not map gets a fresh name (`__p0`, `__p1`, ... in order of first
+// appearance) instead of keeping its own, so it cannot collide with a param of the other side.
+export function renameParams(expr: Expr, names: ReadonlyMap<string, string>, opts: { fresh?: boolean } = {}): Expr {
+  if (names.size === 0 && !opts.fresh) return expr
+  const fresh = new Map<string, string>()
+  const rename = (n: string): string => {
+    const mapped = names.get(n)
+    if (mapped !== undefined) return mapped
+    if (!opts.fresh) return n
+    if (!fresh.has(n)) fresh.set(n, `__p${fresh.size}`)
+    return fresh.get(n)!
+  }
   const op = (o: Operand): Operand =>
-    typeof o === 'string' && o.startsWith('param.') ? `param.${names.get(o.slice(6)) ?? o.slice(6)}` : o
+    typeof o === 'string' && o.startsWith('param.') ? `param.${rename(o.slice(6))}` : o
   const doc = (d: string) =>
-    d.replace(/\{param\.([A-Za-z0-9_]+)\}/g, (_, n: string) => `{param.${names.get(n) ?? n}}`)
+    d.replace(/\{param\.([A-Za-z0-9_]+)\}/g, (_, n: string) => `{param.${rename(n)}}`)
   return mapAtoms(expr, a => {
     switch (a.op) {
       case 'authenticated': return a
