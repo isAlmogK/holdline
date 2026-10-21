@@ -9,6 +9,9 @@ access is governed by RLS policies in `supabase/migrations/`.
 | `expected-rules.yaml` | The approved rules a careful engineer would write for this app |
 | `breakages/R-xxx.patch` | One unified diff per rule, against this folder, that breaks exactly that rule |
 
+The `user_role` claim (R-004) is assumed to come from a Supabase custom access-token hook. The Next.js app
+is never built or installed: Holdline reads only the migrations.
+
 The acceptance test (`packages/cli/test/golden-patch.test.ts`) copies this folder, applies each
 patch, runs `holdline scan` and `holdline check`, and expects exactly that rule to fail.
 After editing `expected-rules.yaml`, run
