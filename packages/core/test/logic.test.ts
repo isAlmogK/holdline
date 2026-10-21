@@ -120,6 +120,18 @@ describe('helpers', () => {
       a({ op: 'eq', left: 'param.accountId', right: 'resource.account_id' }),
     ] })
   })
+  it('renameParams with fresh renames unmapped params to __p0, __p1 in order of appearance', () => {
+    const e: Expr = { and: [
+      a({ op: 'exists', doc: '/accounts/{param.accountId}/members/{actor.uid}' }),
+      a({ op: 'eq', left: 'param.other', right: 'resource.x' }),
+      a({ op: 'eq', left: 'param.acct', right: 'param.accountId' }),
+    ] }
+    expect(renameParams(e, new Map([['acct', 'accountId']]), { fresh: true })).toEqual({ and: [
+      a({ op: 'exists', doc: '/accounts/{param.__p0}/members/{actor.uid}' }),
+      a({ op: 'eq', left: 'param.__p1', right: 'resource.x' }),
+      a({ op: 'eq', left: 'param.accountId', right: 'param.__p0' }),
+    ] })
+  })
   it('collectRefs, mentionsOperand and flattenAnd', () => {
     const e: Expr = { and: [{ ref: 'x' }, { and: [owner, { not: { ref: 'y' } }] }] }
     expect(collectRefs(e).sort()).toEqual(['x', 'y'])

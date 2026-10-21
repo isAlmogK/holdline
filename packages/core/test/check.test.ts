@@ -73,6 +73,14 @@ describe('data-access', () => {
     expect(r[0]).toMatchObject({ status: 'violation', at: { symbol: 'p2', file: 'firestore.rules', line: 4 } })
     expect(r[0]!.message).toContain('read on firestore:/accounts/{accountId}/dogs/{dogId}')
   })
+  it('gives policy params that do not align with the target fresh names, so they cannot collide', () => {
+    // {accountId=**} is the policy's own rest param: it is not the rule's accountId.
+    const r = run({ policies: [
+      { id: 'p1', store: 'firestore', target: '/accounts/{acct}/dogs/{dogId}/{accountId=**}', ops: ['read', 'update'], condition: member },
+    ] }, file([rule]))
+    expect(r.map(x => x.status)).toEqual(['violation', 'violation'])
+    expect(r[0]!.at?.symbol).toBe('p1')
+  })
   it('requires RLS to be enabled on postgres tables', () => {
     const pgRule = { ...rule, target: { store: 'postgres', table: 'dogs' }, requires: { atom: { op: 'eq', left: 'actor.uid', right: 'resource.owner_id' } } }
     const table = { id: 'pg:public.dogs', name: 'public.dogs', columns: [] }

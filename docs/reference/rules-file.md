@@ -108,7 +108,7 @@ Every check returns `stale` (the target is not in the facts) or a list of violat
 |---|---|
 | Postgres | The table must exist and have `rlsEnabled`, otherwise a violation ("Row level security is not enabled", located at the table) |
 | Per op | The OR of the conditions of all policies for that op on the target must imply `requires`. Violation names the first policy that fails on its own |
-| Firestore and Storage | Policy conditions have their `param.*` renamed to the rule target's parameter names (aligned by position) before comparing |
+| Firestore and Storage | Policy conditions have their `param.*` renamed to the rule target's parameter names (aligned by position, `alignParams`) before comparing. A policy param that does not align (for example the policy's own `{rest=**}` param) gets a fresh name (`__p0`, `__p1`, ...) so it cannot collide with a rule param of the same name: `renameParams(condition, names, { fresh: true })` |
 | No matching policy | The condition is false, so it holds (no policy allows it means denied) |
 | Stale | Postgres table not in facts; for Firestore and Storage, no dataOp, policy or collection overlaps the target |
 
