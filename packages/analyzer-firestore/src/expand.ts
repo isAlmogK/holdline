@@ -99,7 +99,8 @@ class Expander {
       this.out.matches.push({ store, target, line: m.line })
     }
     const names = m.path.flatMap(s => (s.kind === 'wildcard' ? [s.name] : []))
-    this.block(store, m.body, segs, new Scope(scope, new Set(names)), false)
+    const rest = m.path.flatMap(s => (s.kind === 'wildcard' && s.rest ? [s.name] : []))
+    this.block(store, m.body, segs, new Scope(scope, new Set(names), new Set(rest)), false)
   }
 }
 
