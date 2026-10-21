@@ -41,6 +41,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@holdline/analyzer-postgres':
+        specifier: workspace:*
+        version: link:../analyzer-postgres
       '@holdline/core':
         specifier: workspace:*
         version: link:../core

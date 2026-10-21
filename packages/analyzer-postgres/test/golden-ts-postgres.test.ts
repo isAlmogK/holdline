@@ -1,7 +1,10 @@
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseFacts } from '@holdline/core'
+import { FileCache, listFiles, parseFacts } from '@holdline/core'
 import { describe, expect, it, vi } from 'vitest'
+import { postgresAnalyzer } from '../src/analyzer.js'
 import { readMigrations, runMigrations } from '../src/migrate.js'
 import { readTables } from '../src/tables.js'
 
@@ -20,5 +23,15 @@ describe('golden-ts-postgres', () => {
     } finally {
       await run.db.close()
     }
+  })
+
+  it('produces the hand-written tables, locations included, through the analyzer', async () => {
+    const expected = parseFacts(JSON.parse(await readFile(`${app}fixtures/facts.json`, 'utf8'))).tables
+    const files = await listFiles(app)
+    expect(await postgresAnalyzer.detect(app, files, {})).toBe(true)
+    const cache = new FileCache(await mkdtemp(join(tmpdir(), 'holdline-cache-'))) // keep the repo clean
+    const out = await postgresAnalyzer.analyze({ root: app, files, cache, config: {}, recognizers: [] })
+    expect(out.diagnostics ?? []).toEqual([])
+    expect(byId(parseFacts({ version: 1, tables: out.tables }).tables)).toEqual(byId(expected))
   })
 })
