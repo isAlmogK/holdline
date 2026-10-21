@@ -10,7 +10,10 @@ const examples = fileURLToPath(new URL('../../../examples/', import.meta.url))
 
 describe('file-patch golden harness', () => {
   it('runs scan and check on an unpatched skeleton', async () => {
-    const out = await runPatchedApp(join(examples, 'golden-firebase'))
+    const app = await mkdtemp(join(tmpdir(), 'holdline-skeleton-'))
+    await writeFile(join(app, 'expected-rules.yaml'), 'version: 1\nvocabulary: []\nrules: []\n')
+    await writeFile(join(app, 'firestore.rules'), 'service cloud.firestore {}\n')
+    const out = await runPatchedApp(app)
     expect(out.scan.code).toBe(0)
     expect(out.check.code).toBe(0)
     expect(out.check.json.summary.rules).toBe(0)
