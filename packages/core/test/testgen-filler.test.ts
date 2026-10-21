@@ -18,4 +18,13 @@ describe('fillerValue', () => {
     expect(checkLiteral('status', ["(status IN ('active', 'archived'))"])).toBe('active')
     expect(checkLiteral('status', ["((role = ANY (ARRAY['owner'::text])))"])).toBeUndefined()
   })
+  it('matches the exact column name only', () => {
+    expect(checkLiteral('status', ["(order_status IN ('x', 'y'))"])).toBeUndefined()
+    expect(checkLiteral('title', ["((subtitle = ANY (ARRAY['x'::text])))"])).toBeUndefined()
+    expect(checkLiteral('id', ["(valid = ANY (ARRAY['a'::text]))"])).toBeUndefined()
+    expect(checkLiteral('status', ["(status_code IN ('x', 'y'))"])).toBeUndefined()
+    expect(checkLiteral('status', ["(status_code IN ('x'))", "(order_status IN ('y'))", "(status IN ('z'))"])).toBe('z')
+    expect(checkLiteral('status', ['("status" IN (\'q\', \'r\'))'])).toBe('q')
+    expect(checkLiteral('role', ['(("role")::text = ANY (ARRAY[\'owner\'::text]))'])).toBe('owner')
+  })
 })

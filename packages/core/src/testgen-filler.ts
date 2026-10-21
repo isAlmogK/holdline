@@ -29,9 +29,11 @@ export function fillerValue(column: { name: string; type: string }, ctx: FillerC
 // (how Postgres prints `col IN ('a', ...)`) or `col IN ('a', ...)`.
 export function checkLiteral(column: string, checks: readonly string[]): string | undefined {
   const col = column.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  // The name must be the whole identifier: no word character on either side (a quoted name carries its quotes).
+  const name = String.raw`(?:"${col}"|(?<![\w"])${col}(?![\w"]))`
   const forms = [
-    new RegExp(String.raw`\(?"?${col}"?\)?(?:::\w+)?\s*=\s*ANY\s*\(\s*\(?ARRAY\s*\[\s*'((?:[^']|'')*)'`, 'i'),
-    new RegExp(String.raw`\(?"?${col}"?\)?\s+IN\s*\(\s*'((?:[^']|'')*)'`, 'i'),
+    new RegExp(String.raw`\(?${name}\)?(?:::\w+)?\s*=\s*ANY\s*\(\s*\(?ARRAY\s*\[\s*'((?:[^']|'')*)'`, 'i'),
+    new RegExp(String.raw`\(?${name}\)?\s+IN\s*\(\s*'((?:[^']|'')*)'`, 'i'),
   ]
   for (const check of checks) {
     for (const form of forms) {
