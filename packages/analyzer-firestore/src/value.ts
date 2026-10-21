@@ -90,10 +90,12 @@ function resolveIdent(name: string, env: Env, ctx: NormalizeContext): Value | un
 export function resolveValue(node: Node, env: Env, ctx: NormalizeContext): Value | undefined {
   switch (node.type) {
     case 'string':
-    case 'int':
     case 'float':
     case 'bool':
       return literal(node.value)
+    case 'int':
+      // Past 2^53 a JS number is not the integer Firestore compares (int64): not exact.
+      return Number.isSafeInteger(node.value) ? literal(node.value) : undefined
     case 'null':
       return literal(null)
     case 'unary': {

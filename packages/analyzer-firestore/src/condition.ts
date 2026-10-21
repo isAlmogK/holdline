@@ -4,9 +4,35 @@ import { compareValues } from './compare.js'
 import type { Env } from './scope.js'
 import { resolveValue, type NormalizeContext, type Value } from './value.js'
 
-/** A condition Holdline cannot map exactly, named by its source text with whitespace collapsed. */
+/** Index of the `)` closing the `(` at index 0, skipping strings and comments; -1 when unbalanced. */
+function closingParen(text: string): number {
+  let depth = 0
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (c === "'" || c === '"') {
+      for (i++; i < text.length && text[i] !== c; i++) if (text[i] === '\\') i++
+    } else if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++
+    } else if (c === '/' && text[i + 1] === '*') {
+      i = text.indexOf('*/', i + 2)
+      if (i < 0) return -1
+      i++
+    } else if (c === '(') depth++
+    else if (c === ')' && --depth === 0) return i
+  }
+  return -1
+}
+
+/** Drops outer parentheses that wrap the whole text: `((a))` → `a`, but `(a) && (b)` is kept. */
+function stripOuterParens(text: string): string {
+  let t = text.trim()
+  while (t.startsWith('(') && closingParen(t) === t.length - 1) t = t.slice(1, -1).trim()
+  return t
+}
+
+/** A condition Holdline cannot map exactly, named by its source text without outer parens, whitespace collapsed. */
 export function opaque(node: Node, ctx: NormalizeContext): Expr {
-  return { opaque: ctx.src.slice(node.start, node.end).replace(/\s+/g, ' ').trim() }
+  return { opaque: stripOuterParens(ctx.src.slice(node.start, node.end)).replace(/\s+/g, ' ').trim() }
 }
 
 const TRUE_VALUE: Value = { kind: 'literal', value: true }

@@ -144,7 +144,20 @@ describe('normalizeCondition: soundness guards', () => {
     expect(cond(`resource.data.a == 1 && request.time < resource.data.e`)).toEqual({ and: [
       atom({ op: 'eq', left: 'resource.a', right: { literal: 1 } }), { opaque: 'request.time < resource.data.e' },
     ] })
-    expect(cond(`!(resource.data.n <= 3)`)).toEqual({ not: { opaque: '(resource.data.n <= 3)' } })
+    expect(cond(`!(resource.data.n <= 3)`)).toEqual({ not: { opaque: 'resource.data.n <= 3' } })
+  })
+  it('opaque text drops only parentheses that wrap the whole node', () => {
+    expect(cond(`((resource.data.n <= 3))`)).toEqual({ opaque: 'resource.data.n <= 3' })
+    expect(cond(`( resource.data.n <= 3 )`)).toEqual({ opaque: 'resource.data.n <= 3' })
+    expect(cond(`(resource.data.n) <= (3)`)).toEqual({ opaque: '(resource.data.n) <= (3)' })
+    expect(cond(`(resource.data.s == ')') == (1 <= 2)`)).toEqual({ opaque: `(resource.data.s == ')') == (1 <= 2)` })
+    expect(cond(`(resource.data.n <= 3 /* ) */)`)).toEqual({ opaque: 'resource.data.n <= 3 /* ) */' })
+  })
+  it('an integer past 2^53 is not exact, so its comparison is opaque', () => {
+    expect(cond('!(resource.data.n == 9007199254740993)')).toEqual({ not: { opaque: 'resource.data.n == 9007199254740993' } })
+    expect(cond('resource.data.n > -9007199254740993')).toEqual({ opaque: 'resource.data.n > -9007199254740993' })
+    expect(cond('resource.data.n in [1, 9007199254740993]')).toEqual({ opaque: 'resource.data.n in [1, 9007199254740993]' })
+    expect(cond('resource.data.n == 9007199254740991')).toEqual(atom({ op: 'eq', left: 'resource.n', right: { literal: 9007199254740991 } }))
   })
   it('resolves an identifier through a binding in its own env', () => {
     const src = `x == 'a' && y && request.auth.uid == z`

@@ -11,6 +11,7 @@ function holdsFirestore(op: ComparisonOp, a: Literal, b: Literal): boolean {
   switch (op) {
     case 'eq': return deepEqual(a, b)
     case 'ne': return !deepEqual(a, b)
+    // `!Array.isArray(b)` is unreachable: compareValues rejects a non-array literal on the right of `in` first.
     case 'in': return !Array.isArray(b) || b.some(x => deepEqual(x, a))
     case 'lt': return typeof a === 'number' && typeof b === 'number' ? a < b : true
     case 'gt': return typeof a === 'number' && typeof b === 'number' ? a > b : true
