@@ -4,7 +4,7 @@ import { factsFromDatabase } from '../src/facts.js'
 import { runMigrations, type MigrationRun } from '../src/migrate.js'
 import { evaluate, type Row, type World } from './helpers/model.js'
 
-vi.setConfig({ testTimeout: 120_000, hookTimeout: 60_000 })
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 // Spec 9: in every sampled world, if real Postgres allows the request, the analyzer's condition is true.
 
@@ -63,7 +63,7 @@ beforeAll(async () => {
   run = await runMigrations([{ path: 'schema.sql', sql: SCHEMA }], 'supabase')
   if (run.failure) throw new Error(run.failure.message)
 })
-afterAll(async () => { await run.db.close() })
+afterAll(async () => { await run?.db.close() }) // undefined when beforeAll failed
 
 const COLUMNS = ['id', 'org_id', 'owner_id', 'status', 'n', 'deleted_at'] as const
 const values = (r: Row) => COLUMNS.map(c => r[c] ?? null)
@@ -117,18 +117,25 @@ async function withPolicies<T>(policiesSql: string, op: Op, body: (condition: Ex
   }
 }
 
-async function checkSound(policiesSql: string, op: Op, seed: number): Promise<void> {
+// Update needs a caller, a USING row and a WITH CHECK row to line up, so it gets more worlds.
+const COUNT: Record<Op, number> = { read: 150, list: 150, create: 150, delete: 150, update: 400 }
+
+// anonKey: some world allowed by the SQL is an anonymous caller carrying the anon key's claims.
+async function checkSound(policiesSql: string, op: Op, seed: number, opts: { anonKey?: boolean } = {}): Promise<void> {
   await withPolicies(policiesSql, op, async condition => {
     expect(hasOpaque(condition), JSON.stringify(condition)).toBe(false)
     let allowed = 0
     let denied = 0
-    for (const s of samples(150, seed)) {
+    let anonKeyAllowed = 0
+    for (const s of samples(COUNT[op], seed)) {
       const sql = await sqlAllows(s, op)
       if (sql) allowed++; else denied++
+      if (sql && !s.world.actor && s.jwt) anonKeyAllowed++
       if (sql) expect(evaluate(condition, s.world), `SQL allowed but Expr false: ${JSON.stringify({ s, condition })}`).toBe(true)
     }
     expect(allowed, 'no world was allowed').toBeGreaterThan(0)
     expect(denied, 'no world was denied').toBeGreaterThan(0)
+    if (opts.anonKey) expect(anonKeyAllowed, 'no anon-key world was allowed').toBeGreaterThan(0)
   })
 }
 
@@ -138,7 +145,7 @@ const select = (using: string, to = 'anon, authenticated', name = 'p') =>
 const SEE_ALL = 'create policy see on public.docs for select using (true);'
 
 describe('normalization is never stronger than the SQL', () => {
-  const cases: [string, string, Op][] = [
+  const cases: [string, string, Op, { anonKey?: boolean }?][] = [
     ['auth.uid() = column', select('owner_id = auth.uid()'), 'read'],
     ['(select auth.uid())', select('(select auth.uid()) = owner_id'), 'read'],
     ['auth.uid()::text', select(`auth.uid()::text = '${U1}'`), 'read'],
@@ -174,15 +181,38 @@ describe('normalization is never stronger than the SQL', () => {
     ['restrictive for anon only', select('true') + " create policy r on public.docs as restrictive for select to anon using (status = 'a');", 'read'],
     ['restrictive for authenticated only', select('true') + " create policy r on public.docs as restrictive for select to authenticated using (owner_id = auth.uid());", 'read'],
     ['anon-only permissive', select("status = 'a'", 'anon') + select('owner_id = auth.uid()', 'authenticated', 'q'), 'read'],
+    ["jwt role = 'anon'", select("(auth.jwt() ->> 'role') = 'anon' or status = 'a'"), 'read', { anonKey: true }],
+    ["jwt role = 'authenticated'", select("(auth.jwt() ->> 'role') = 'authenticated'"), 'read'],
+    ['auth.role() IN list', select("auth.role() in ('authenticated', 'service_role')"), 'read'],
+    ['restrictive update', `${SEE_ALL} create policy p on public.docs for update using (true);
+      create policy r on public.docs as restrictive for update using (owner_id = auth.uid()) with check (status = 'a');`, 'update'],
+    ['restrictive insert', `create policy p on public.docs for insert with check (true);
+      create policy r on public.docs as restrictive for insert to authenticated with check (owner_id = auth.uid());`, 'create', { anonKey: true }],
+    ['anon-only permissive insert', `create policy p on public.docs for insert to anon with check (status = 'a');
+      create policy q on public.docs for insert to authenticated with check (owner_id = auth.uid());`, 'create', { anonKey: true }],
+    ['anon-only permissive delete', `${SEE_ALL} create policy p on public.docs for delete to anon using (status = 'a');
+      create policy q on public.docs for delete to authenticated using (owner_id = auth.uid());`, 'delete', { anonKey: true }],
+    ['jwt claim <>', select("(auth.jwt() ->> 'user_role') <> 'member'"), 'read'], // user_role is 'admin' or absent
+    ['jwt claim IN list', select("(auth.jwt() -> 'app_metadata' ->> 'tier') in ('gold', 'silver')"), 'read'],
+    ['column <> auth.uid()', select('owner_id <> auth.uid()'), 'read'],
+    ['literal < column', select('3 < n'), 'read', { anonKey: true }],
   ]
-  cases.forEach(([name, sql, op], i) => {
-    it(name, async () => { await checkSound(sql, op, 1000 + i) })
+  cases.forEach(([name, sql, op, opts], i) => {
+    it(name, async () => { await checkSound(sql, op, 1000 + i, opts) })
   })
 
-  // Under NOT, the subquery may see fewer rows than the model assumes (RLS on the inner table), so the
-  // analyzer keeps NOT EXISTS opaque: the property would be vacuous, so check the opaque instead.
-  it('NOT EXISTS stays opaque', async () => {
-    const sql = select('not exists (select 1 from public.members m where m.org_id = docs.org_id and m.user_id = auth.uid())')
-    await withPolicies(sql, 'read', async condition => { expect(hasOpaque(condition)).toBe(true) })
-  })
+  // Shapes the analyzer keeps opaque on purpose; the property would be vacuous, so check the opaque instead.
+  const opaque: [string, string][] = [
+    // Under NOT, the subquery may see fewer rows than the model assumes (RLS on the inner table).
+    ['NOT EXISTS', 'not exists (select 1 from public.members m where m.org_id = docs.org_id and m.user_id = auth.uid())'],
+    // An anonymous caller's role is 'anon', which no actor.role atom can be true for.
+    ["auth.role() IN list with 'anon'", "auth.role() in ('anon', 'authenticated')"],
+    // The role claim is 'anon' for an anonymous caller, so `<> 'anon'` is not "any actor".
+    ['jwt role <>', "(auth.jwt() ->> 'role') <> 'anon'"],
+  ]
+  for (const [name, using] of opaque) {
+    it(`${name} stays opaque`, async () => {
+      await withPolicies(select(using), 'read', async condition => { expect(hasOpaque(condition), JSON.stringify(condition)).toBe(true) })
+    })
+  }
 })
