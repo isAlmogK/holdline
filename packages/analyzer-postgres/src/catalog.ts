@@ -1,7 +1,7 @@
 import type { PGlite } from '@electric-sql/pglite'
 import type { Table } from '@holdline/core'
 import type { Dialect } from './detect.js'
-import { readTables, SYSTEM_SCHEMAS_SQL } from './tables.js'
+import { readTables, SYSTEM_SCHEMAS_SQL, type Queryable } from './tables.js'
 
 export interface SqlFunction {
   schema: string
@@ -21,6 +21,10 @@ export interface CatalogIndex {
 }
 
 export const SHIM_SCHEMAS = ['auth', 'storage', 'extensions']
+
+// pg_get_expr, format_type and pg_get_constraintdef print names relative to the session search_path. The catalog
+// is read with these, the schemas normalize.ts resolves unqualified names through (a migration may have changed it).
+export const SEARCH_PATH: Record<Dialect, string> = { supabase: '"$user", public, extensions', plain: 'public' }
 
 export interface PolicyRow {
   schema: string
@@ -55,7 +59,7 @@ function searchPathOf(config: string[] | null): string[] | undefined {
     .filter(s => s !== '' && s !== '$user' && s !== 'pg_temp' && s !== 'pg_catalog')
 }
 
-async function readFunctions(db: PGlite): Promise<Map<string, SqlFunction>> {
+async function readFunctions(db: Queryable): Promise<Map<string, SqlFunction>> {
   const rows = (await db.query<FnRow>(`
     select n.nspname as schema, p.proname as name, p.pronargs as nargs, p.proargnames::text[] as names,
       p.proargmodes::text[] as modes, l.lanname as language, p.provolatile as volatility, p.prosrc as body,
@@ -78,7 +82,15 @@ async function readFunctions(db: PGlite): Promise<Map<string, SqlFunction>> {
   return functions
 }
 
-export async function readCatalog(db: PGlite, dialect: Dialect): Promise<Catalog> {
+// In a transaction with a local search_path, so the caller's session is left as it was.
+export function readCatalog(db: PGlite, dialect: Dialect): Promise<Catalog> {
+  return db.transaction(async tx => {
+    await tx.query(`select set_config('search_path', $1, true)`, [SEARCH_PATH[dialect]])
+    return readAll(tx, dialect)
+  })
+}
+
+async function readAll(db: Queryable, dialect: Dialect): Promise<Catalog> {
   const excluded = dialect === 'supabase' ? SHIM_SCHEMAS : []
   const tables = await readTables(db, excluded)
   const names = new Set(tables.map(t => t.name))

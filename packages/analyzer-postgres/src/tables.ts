@@ -1,5 +1,8 @@
-import type { PGlite } from '@electric-sql/pglite'
+import type { Transaction } from '@electric-sql/pglite'
 import type { Table } from '@holdline/core'
+
+// A PGlite database or one of its transactions.
+export type Queryable = Pick<Transaction, 'query'>
 
 export const SYSTEM_SCHEMAS_SQL = `n.nspname <> 'information_schema' and n.nspname not like 'pg\\_%'`
 
@@ -34,7 +37,7 @@ export function checkExpr(def: string): string {
   return def.replace(/ NOT VALID$/, '').replace(/^CHECK \((.*)\)$/s, '$1')
 }
 
-export async function readTables(db: PGlite, excluded: readonly string[]): Promise<Table[]> {
+export async function readTables(db: Queryable, excluded: readonly string[]): Promise<Table[]> {
   const where = `${SYSTEM_SCHEMAS_SQL} and n.nspname not in (${sqlList(excluded)}) and c.relkind in ('r', 'p')`
   const from = `pg_class c join pg_namespace n on n.oid = c.relnamespace`
   const tables = (await db.query<TableRow>(

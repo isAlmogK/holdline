@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { PGlite } from '@electric-sql/pglite'
 import { listFiles, type HoldlineConfig } from '@holdline/core'
+import { SEARCH_PATH } from './catalog.js'
 import { findMigrations, type Dialect } from './detect.js'
 import { SUPABASE_SHIM } from './shim.js'
 
@@ -20,6 +21,8 @@ export async function readMigrations(root: string, paths: readonly string[]): Pr
 
 // A fresh in-memory Postgres; the Supabase shim for that dialect; each migration in its own transaction.
 // Stops at the first failure, because later migrations would run against the wrong schema.
+// The dialect's search_path is restored after each migration: a session-level SET (or pg_dump's set_config) would
+// otherwise change how names resolve in later migrations and how the catalog prints them.
 export async function runMigrations(migrations: readonly Migration[], dialect: Dialect): Promise<MigrationRun> {
   const { PGlite } = await import('@electric-sql/pglite')
   const { uuid_ossp } = await import('@electric-sql/pglite/contrib/uuid_ossp')
@@ -27,12 +30,14 @@ export async function runMigrations(migrations: readonly Migration[], dialect: D
   const db = await PGlite.create({ extensions: { uuid_ossp, pgcrypto } })
   const run: MigrationRun = { db, dialect, migrations: [...migrations] }
   if (dialect === 'supabase') await db.exec(SUPABASE_SHIM)
+  const searchPath = dialect === 'supabase' ? SEARCH_PATH.supabase : (await db.query<{ search_path: string }>('show search_path')).rows[0]!.search_path
   for (const m of migrations) {
     try {
       await db.transaction(tx => tx.exec(m.sql))
     } catch (e) {
       return { ...run, failure: failureOf(m, e) }
     }
+    await db.query(`select set_config('search_path', $1, false)`, [searchPath])
   }
   return run
 }
