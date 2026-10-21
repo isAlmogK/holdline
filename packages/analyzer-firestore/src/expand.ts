@@ -49,7 +49,7 @@ class Expander {
       if (s.kind === 'wildcard') return s.rest ? `{${s.name}=**}` : `{${s.name}}`
       let n = this.interps.get(s)
       if (n === undefined) { n = this.interps.size + 1; this.interps.set(s, n) }
-      return `{_interp${n}}`
+      return `{_interp${n}=**}`
     }).join('/')
   }
 
@@ -67,21 +67,35 @@ class Expander {
   }
 
   private block(store: Store, body: Block, segs: MatchSegment[], scope: Scope, top: boolean): void {
-    for (const fn of body.functions) scope.functions.set(fn.name, { decl: fn, scope })
+    for (const fn of body.functions) {
+      if (scope.functions.has(fn.name)) {
+        this.out.warnings.push(`function ${fn.name} is declared twice in the same block; the last one is used`)
+      }
+      scope.functions.set(fn.name, { decl: fn, scope })
+    }
     for (const allow of body.allows) {
       this.out.allows.push({ store, target: this.target(store, segs), ops: expandOps(allow.ops), allow, scope })
     }
     for (const m of body.matches) this.match(store, m, segs, scope, top)
   }
 
+  /** True when a match holding allows (or a leaf match) in this subtree has a concatenated path without the prefix. */
+  private outsidePrefix(store: Store, m: Match, outer: readonly MatchSegment[]): boolean {
+    const segs = [...outer, ...m.path]
+    const relevant = m.body.allows.length > 0 || m.body.matches.length === 0
+    if (relevant && !hasPrefix(store, segs)) return true
+    return m.body.matches.some(c => this.outsidePrefix(store, c, segs))
+  }
+
   private match(store: Store, m: Match, outer: MatchSegment[], scope: Scope, top: boolean): void {
     const segs = [...outer, ...m.path]
-    if (top && !hasPrefix(store, segs)) {
+    if (top && this.outsidePrefix(store, m, outer)) {
       this.out.warnings.push(`match ${this.render(segs)} is not under ${PREFIX[store].display}`)
     }
     const target = this.target(store, segs)
-    if (!this.seenTargets.has(target)) {
-      this.seenTargets.add(target)
+    const key = `${store}:${target}`
+    if (!this.seenTargets.has(key)) {
+      this.seenTargets.add(key)
       this.out.matches.push({ store, target, line: m.line })
     }
     const names = m.path.flatMap(s => (s.kind === 'wildcard' ? [s.name] : []))

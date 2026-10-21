@@ -44,11 +44,11 @@ describe('expandRules', () => {
     expect(e.warnings).toEqual([])
   })
   it('renders an interpolated match segment as a conservative wildcard', () => {
-    expect(expand(fs('match /a/$(x) { allow read: if true; }')).allows[0]!.target).toBe('/a/{_interp1}')
+    expect(expand(fs('match /a/$(x) { allow read: if true; }')).allows[0]!.target).toBe('/a/{_interp1=**}')
   })
   it('numbers interpolated segments per file', () => {
     const e = expand(fs('match /a/$(x) { allow read; } match /b/$(y) { allow read; }'))
-    expect(e.allows.map(a => a.target)).toEqual(['/a/{_interp1}', '/b/{_interp2}'])
+    expect(e.allows.map(a => a.target)).toEqual(['/a/{_interp1=**}', '/b/{_interp2}'])
   })
   it('ignores other services with a warning', () => {
     const e = expand(`service other.thing { match /a { allow read; } }`)
@@ -61,6 +61,35 @@ describe('expandRules', () => {
     expect(scope.isWildcard('orgId')).toBe(true)
     expect(scope.isWildcard('database')).toBe(true)
     expect(scope.findFunction('f')?.decl.name).toBe('f')
+  })
+  it('keeps one MatchSite per store when two services share a target', () => {
+    const e = expand(`${fs('match /files/{id} { allow read; }')}
+service firebase.storage { match /b/{bucket}/o { match /files/{id} { allow read; } } }`)
+    expect(e.matches.map(m => [m.store, m.target])).toEqual([
+      ['firestore', '/'], ['firestore', '/files/{id}'], ['storage', '/'], ['storage', '/files/{id}'],
+    ])
+  })
+  it('does not warn when the prefix is split across nested matches', () => {
+    const e = expand(`service cloud.firestore { match /databases/{d} { match /documents { match /x/{id} { allow read; } } } }`)
+    expect(e.allows[0]!.target).toBe('/x/{id}')
+    expect(e.warnings).toEqual([])
+  })
+  it('warns once per offending top-level match, with Storage text', () => {
+    const e = expand(`service firebase.storage { match /files/{id} { match /a { allow read; } match /b { allow read; } } }`)
+    expect(e.warnings).toEqual(['match /files/{id} is not under /b/{bucket}/o'])
+  })
+  it('does not treat a rest wildcard or a wrong literal as the prefix', () => {
+    expect(expand(`service cloud.firestore { match /databases/{d=**}/documents { allow read; } }`).warnings).toHaveLength(1)
+    expect(expand(`service cloud.firestore { match /databases/{d}/docs { allow read; } }`).warnings).toHaveLength(1)
+    expect(expand(`service cloud.firestore { match /db/{d}/documents { allow read; } }`).warnings).toHaveLength(1)
+  })
+  it('keeps the first MatchSite for a repeated target', () => {
+    const e = expand(fs('match /a/{x} { allow read; }\n match /a/{x} { allow read; }'))
+    expect(e.matches.filter(m => m.target === '/a/{x}')).toEqual([{ store: 'firestore', target: '/a/{x}', line: 1 }])
+  })
+  it('warns about a function declared twice in one block', () => {
+    const e = expand(fs('function f() { return true; } function f() { return false; } allow read: if f();'))
+    expect(e.warnings).toEqual(['function f is declared twice in the same block; the last one is used'])
   })
   it('gives one policy id per allow and op, disambiguating same-line duplicates', () => {
     const src = fs('match /a/{id} {\n allow read: if true; allow get: if false;\n allow write; }')
