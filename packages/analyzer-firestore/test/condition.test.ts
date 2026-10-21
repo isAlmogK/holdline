@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Expr } from '@holdline/core'
 import { normalizeCondition } from '../src/condition.js'
 import { parseExpressionSource } from '../src/parse-expr.js'
-import { Scope, type Binding, type Env } from '../src/scope.js'
+import { rootEnv, Scope, type Binding, type Env } from '../src/scope.js'
 import { simplify } from '../src/simplify.js'
 import { cond } from './helpers/cond.js'
 
@@ -163,14 +163,14 @@ describe('normalizeCondition: soundness guards', () => {
     const src = `x == 'a' && y && request.auth.uid == z`
     const node = parseExpressionSource(src)
     const outer = new Scope(undefined, new Set(['thingId']))
-    const outerEnv: Env = { scope: outer, bindings: new Map(), depth: 0 }
+    const outerEnv: Env = rootEnv(outer)
     const bindings = new Map<string, Binding>([
       ['x', { node: parseExpressionSource('resource.data.kind'), env: outerEnv }],
       ['y', { node: parseExpressionSource(`resource.data.get('open', false)`), env: outerEnv }],
       ['z', { node: parseExpressionSource('thingId'), env: outerEnv }],
     ])
-    const env: Env = { scope: new Scope(undefined, new Set()), bindings, depth: 1 }
-    const ctx = { store: 'firestore' as const, src, recognizers: new Map<string, string>(), functionsUsed: new Set<string>() }
+    const env: Env = { ...rootEnv(new Scope(undefined, new Set())), bindings, depth: 1 }
+    const ctx = { store: 'firestore' as const, src, recognizers: new Map<string, string>(), functionCounts: new Map<string, number>(), functionsUsed: new Set<string>() }
     expect(simplify(normalizeCondition(node, env, ctx))).toEqual({ and: [
       atom({ op: 'eq', left: 'resource.kind', right: { literal: 'a' } }),
       atom({ op: 'eq', left: 'resource.open', right: { literal: true } }),

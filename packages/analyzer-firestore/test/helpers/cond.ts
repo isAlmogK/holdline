@@ -2,7 +2,7 @@ import type { Expr } from '@holdline/core'
 import { normalizeCondition } from '../../src/condition.js'
 import { expandRules } from '../../src/expand.js'
 import { parseRules } from '../../src/parser.js'
-import { rootEnv } from '../../src/scope.js'
+import { countFunctions, rootEnv } from '../../src/scope.js'
 import { simplify } from '../../src/simplify.js'
 
 export function cond(condition: string, opts: { store?: 'firestore' | 'storage'; before?: string; inside?: string; path?: string; recognizers?: Record<string, string> } = {}): Expr {
@@ -14,6 +14,6 @@ export function cond(condition: string, opts: { store?: 'firestore' | 'storage';
   const r = parseRules(src)
   if (!r.ok) throw new Error(r.error.message)
   const site = expandRules(r.ast).allows[0]!
-  const ctx = { store, src, recognizers: new Map(Object.entries(opts.recognizers ?? {})), functionsUsed: new Set<string>() }
+  const ctx = { store, src, recognizers: new Map(Object.entries(opts.recognizers ?? {})), functionCounts: countFunctions(r.ast), functionsUsed: new Set<string>() }
   return simplify(normalizeCondition(site.allow.condition!, rootEnv(site.scope), ctx))
 }

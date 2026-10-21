@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { normalizeCondition } from '../src/condition.js'
 import { expandRules } from '../src/expand.js'
 import { parseRules } from '../src/parser.js'
-import { rootEnv } from '../src/scope.js'
+import { countFunctions, rootEnv } from '../src/scope.js'
 import { cond } from './helpers/cond.js'
 
 const auth = { atom: { op: 'authenticated' } }
@@ -91,6 +91,10 @@ describe('inlining edge cases', () => {
     expect(cond('isMine()', { before: 'function isMine() { return request.auth.uid == thingId; }' }))
       .toEqual({ opaque: 'request.auth.uid == thingId' })
   })
+  it('a callee does not see the caller\'s params', () => {
+    const before = 'function g() { return x == 1; } function f(x) { return g(); }'
+    expect(cond('f(resource.data.a)', { before })).toEqual({ opaque: 'x == 1' })
+  })
   it('a recognized function in value position is inlined, not a ref', () => {
     const before = 'function uid() { return request.auth.uid; }'
     expect(cond('uid() == resource.data.owner', { before, recognizers: { uid: 'caller' } }))
@@ -98,7 +102,7 @@ describe('inlining edge cases', () => {
   })
   it('mutual recursion is opaque', () => {
     expect(cond('f() && resource.data.a == 1', { before: 'function f() { return g(); } function g() { return f(); }' }))
-      .toEqual({ and: [{ opaque: expect.any(String) }, { atom: { op: 'eq', left: 'resource.a', right: { literal: 1 } } }] })
+      .toEqual({ and: [{ opaque: 'f()' }, { atom: { op: 'eq', left: 'resource.a', right: { literal: 1 } } }] })
   })
   it('a chain of 20 calls is inlined; 21 is too deep', () => {
     const chain = (n: number) => Array.from({ length: n }, (_, i) =>
@@ -120,8 +124,38 @@ describe('inlining edge cases', () => {
     const r = parseRules(src)
     if (!r.ok) throw new Error(r.error.message)
     const site = expandRules(r.ast).allows[0]!
-    const ctx = { store: 'firestore' as const, src, recognizers: new Map([['signedIn', 'signed-in']]), functionsUsed: new Set<string>() }
+    const ctx = { store: 'firestore' as const, src, recognizers: new Map([['signedIn', 'signed-in']]), functionCounts: countFunctions(r.ast), functionsUsed: new Set<string>() }
     normalizeCondition(site.allow.condition!, rootEnv(site.scope), ctx)
     expect([...ctx.functionsUsed].sort()).toEqual(['owns', 'signedIn', 'uid'])
+  })
+})
+
+describe('recognizers match only a function declared once in the file', () => {
+  it('a recognized name shadowed by another declaration is inlined, not a ref', () => {
+    const before = 'function signedIn() { return request.auth != null; }'
+    const inside = 'function signedIn() { return true; }'
+    expect(cond('signedIn()', { before, inside, recognizers: { signedIn: 'signed-in' } })).toEqual(cond('true'))
+  })
+  it('a recognized name declared in two sibling matches is inlined, not a ref', () => {
+    const fn = 'function signedIn() { return request.auth != null; }'
+    expect(cond('signedIn()', { before: `match /other/{o} { ${fn} }`, inside: fn, recognizers: { signedIn: 'signed-in' } }))
+      .toEqual(auth)
+  })
+})
+
+describe('inlining limits', () => {
+  it('a function calling itself is opaque at once, even when it calls itself twice', () => {
+    const t = performance.now()
+    expect(cond('f()', { before: 'function f() { return f() && f(); }' })).toEqual({ and: [{ opaque: 'f()' }, { opaque: 'f()' }] })
+    expect(performance.now() - t).toBeLessThan(1000)
+  })
+  it('a 20-deep chain where each function calls the next twice stops at the inlining budget', () => {
+    const before = Array.from({ length: 20 }, (_, i) =>
+      i === 19 ? `function f${i}() { return resource.data.a == 1; }` : `function f${i}() { return f${i + 1}() && f${i + 1}(); }`).join(' ')
+    const t = performance.now()
+    const result = cond('f0()', { before })
+    expect(performance.now() - t).toBeLessThan(1000)
+    expect(JSON.stringify(result)).toContain('"opaque"')
+    expect(JSON.stringify(result)).toContain('"resource.a"')
   })
 })

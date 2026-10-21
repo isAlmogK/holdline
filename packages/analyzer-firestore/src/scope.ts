@@ -1,4 +1,4 @@
-import type { FunctionDecl, Node } from './ast.js'
+import type { Block, FunctionDecl, Node, RulesAst } from './ast.js'
 
 export interface FunctionDef { decl: FunctionDecl; scope: Scope }
 
@@ -26,5 +26,32 @@ export class Scope {
 
 /** A function parameter or `let`: its expression, resolved lazily in the env it was written in. */
 export interface Binding { node: Node; env: Env }
-export interface Env { scope: Scope; bindings: ReadonlyMap<string, Binding>; depth: number }
-export const rootEnv = (scope: Scope): Env => ({ scope, bindings: new Map(), depth: 0 })
+/**
+ * Where an expression is read. `active` holds the functions being inlined around it (Firestore forbids
+ * recursion); `budget` is shared by every env derived from one `rootEnv`, i.e. one normalized condition.
+ */
+export interface Env {
+  scope: Scope
+  bindings: ReadonlyMap<string, Binding>
+  depth: number
+  active: ReadonlySet<FunctionDef>
+  budget: { inlines: number }
+}
+
+/** How many function inlines one condition may make; past it, further calls are opaque. */
+export const MAX_INLINES_PER_CONDITION = 1000
+
+/** A fresh env for one condition: call it once per normalized condition. */
+export const rootEnv = (scope: Scope): Env =>
+  ({ scope, bindings: new Map(), depth: 0, active: new Set(), budget: { inlines: MAX_INLINES_PER_CONDITION } })
+
+/** Declarations per function name across the whole file, at every level. */
+export function countFunctions(ast: RulesAst): Map<string, number> {
+  const counts = new Map<string, number>()
+  const visit = (block: Block): void => {
+    for (const fn of block.functions) counts.set(fn.name, (counts.get(fn.name) ?? 0) + 1)
+    for (const m of block.matches) visit(m.body)
+  }
+  for (const svc of ast.services) visit(svc.body)
+  return counts
+}

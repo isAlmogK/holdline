@@ -83,7 +83,7 @@ export function normalizeCondition(node: Node, env: Env, ctx: NormalizeContext):
     case 'call': {
       const arg = lookupArg(node, 'exists', env, ctx)
       if (!arg) {
-        const fn = inlineCall(node, env, ctx)
+        const fn = inlineCall(node, env, ctx, 'condition')
         if (fn.kind === 'ref') return { ref: fn.id }
         if (fn.kind === 'inline') return normalizeCondition(fn.node, fn.env, ctx)
         if (fn.kind === 'too-deep') return opaque(node, ctx)

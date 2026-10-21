@@ -16,6 +16,7 @@ export interface NormalizeContext {
   store: 'firestore' | 'storage'
   src: string // the file's source, for opaque text
   recognizers: ReadonlyMap<string, string> // zero-parameter function name -> vocabulary id
+  functionCounts: ReadonlyMap<string, number> // declarations per function name in the file (countFunctions)
   functionsUsed: Set<string>
 }
 

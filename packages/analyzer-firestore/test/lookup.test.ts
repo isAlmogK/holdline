@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { lookupPath } from '../src/lookup-path.js'
 import { parseExpressionSource } from '../src/parse-expr.js'
-import { Scope, type Binding, type Env } from '../src/scope.js'
+import { rootEnv, Scope, type Binding, type Env } from '../src/scope.js'
 import { cond } from './helpers/cond.js'
 
 const auth = { atom: { op: 'authenticated' } }
@@ -109,15 +109,15 @@ describe('lookups: edges', () => {
 })
 
 describe('lookupPath', () => {
-  const ctx = (src: string) => ({ store: 'firestore' as const, src, recognizers: new Map<string, string>(), functionsUsed: new Set<string>() })
-  const outerEnv: Env = { scope: new Scope(undefined, new Set(['thingId'])), bindings: new Map(), depth: 0 }
+  const ctx = (src: string) => ({ store: 'firestore' as const, src, recognizers: new Map<string, string>(), functionCounts: new Map<string, number>(), functionsUsed: new Set<string>() })
+  const outerEnv: Env = rootEnv(new Scope(undefined, new Set(['thingId'])))
 
   it('follows a binding to a path literal, in the binding\'s env', () => {
     const bindings = new Map<string, Binding>([
       ['p', { node: parseExpressionSource(`${DB}/users/$(request.auth.uid)/items/$(thingId)`), env: outerEnv }],
       ['q', { node: parseExpressionSource(`'not a path'`), env: outerEnv }],
     ])
-    const env: Env = { scope: new Scope(undefined, new Set()), bindings, depth: 1 }
+    const env: Env = { ...rootEnv(new Scope(undefined, new Set())), bindings, depth: 1 }
     expect(lookupPath(parseExpressionSource('p'), env, ctx('p'))).toEqual({ path: '/users/{actor.uid}/items/{param.thingId}', auth: true })
     expect(lookupPath(parseExpressionSource('q'), env, ctx('q'))).toBeUndefined()
     expect(lookupPath(parseExpressionSource('r'), env, ctx('r'))).toBeUndefined()
