@@ -39,8 +39,14 @@ function assign(target: Record<string, unknown>, key: string, o: string, value: 
 }
 
 // A seeded document is unique per Firestore path: docs from `exists` atoms and lookups on one path merge.
+// A doc on the record's own path merges into the record (and, like a lookup of it, reads the stored record).
 // Postgres rows (`pg:` docs have a table, not a `/path`) are never merged.
 export function addDoc(w: World, doc: SeedDoc): SeedDoc {
+  if (doc.path === w.targetPath) {
+    w.recordLookup = true
+    for (const [k, v] of Object.entries(doc.data)) assign(w.resource, k, k, v)
+    return { path: doc.path, data: w.resource }
+  }
   const existing = doc.path.startsWith('/') ? w.docs.find(d => d.path === doc.path) : undefined
   if (!existing) {
     w.docs.push(doc)

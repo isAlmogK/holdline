@@ -3,6 +3,9 @@ import { hashRule } from '../src/hash.js'
 import { RuleSchema } from '../src/rules.js'
 import { parseTestFile, serializeTestFile } from '../src/testcase.js'
 import { generateTests } from '../src/testgen.js'
+import type { DataAccessRule } from '../src/rules.js'
+import { holds } from '../src/testgen-eval.js'
+import { freshWorld } from '../src/testgen-satisfy.js'
 
 const vocab = new Map()
 const rule = (raw: Record<string, unknown>) => RuleSchema.parse({ id: 'R-001', text: 't', status: 'approved', ...raw })
@@ -345,5 +348,44 @@ describe('generateTests with lookup operands', () => {
     const lt = generateTests(rule({ atom: { op: 'lt', left: 'doc(/accounts/x).n', right: { literal: 3 } } }), vocab)!
     expect(lt.cases).toEqual([])
     expect(lt.skipped).toHaveLength(1)
+  })
+})
+
+describe('exists on the record under test', () => {
+  const r = rule({
+    type: 'data-access',
+    target: { store: 'firestore', path: '/dogs/{dogId}' },
+    ops: ['read', 'create'],
+    requires: { and: [
+      { atom: { op: 'exists', doc: '/dogs/{param.dogId}' } },
+      { atom: { op: 'eq', left: 'resource.ownerId', right: 'actor.uid' } },
+    ] },
+  })
+  const file = generateTests(r, vocab)!
+
+  it('seeds every path once, merging the exists doc into the record', () => {
+    expect(file.cases.length).toBeGreaterThan(0)
+    for (const c of file.cases) expect(new Set(c.seed.map(s => s.path)).size).toBe(c.seed.length)
+    expect(file.cases[0]!.seed).toEqual([{ path: '/dogs/dogId-1', data: { ownerId: 'user-1' } }])
+  })
+  it('skips create, where the record does not exist yet', () => {
+    const only = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'firestore', path: '/dogs/{dogId}' },
+      ops: ['create', 'read'],
+      requires: { atom: { op: 'exists', doc: '/dogs/{param.dogId}' } },
+    }), vocab)!
+    expect(only.cases.map(c => c.do.op)).toEqual(['read'])
+    expect(only.cases[0]!.seed).toEqual([{ path: '/dogs/dogId-1', data: {} }])
+    expect(only.skipped).toEqual([
+      'create: the condition reads the stored record, which does not exist on create',
+      expect.stringMatching(/^read: cannot deny only exists\(\/dogs\/\{param\.dogId\}\)/),
+    ])
+  })
+  it('does not treat exists(record) as true on create', () => {
+    const w = freshWorld(r as DataAccessRule)
+    const atom = { op: 'exists', doc: '/dogs/{param.dogId}' } as const
+    expect(holds(w, atom)).toBe(true)
+    expect(holds(w, atom, 'create')).toBe(false)
   })
 })

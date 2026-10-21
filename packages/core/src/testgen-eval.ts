@@ -1,5 +1,6 @@
 import { deepEqual } from './canonical.js'
 import { isLookupOperand, parseLookup, type Atom, type Operand } from './expr.js'
+import type { Op } from './facts.js'
 import { read, type World } from './testgen-world.js'
 
 // Evaluates one atom against a generated world. It is the generator's own check that a world
@@ -41,7 +42,8 @@ function value(w: World, o: Operand): unknown {
   return undefined
 }
 
-function exists(w: World, doc: string): boolean {
+// The record under test exists for every op but `create` (cases for other ops seed it).
+function exists(w: World, doc: string, op: Op | undefined): boolean {
   if (doc.startsWith('pg:')) {
     const [table, query = ''] = doc.slice(3).split('?')
     const cols = query.split('&').filter(Boolean).map(pair => pair.split('=') as [string, string])
@@ -49,13 +51,15 @@ function exists(w: World, doc: string): boolean {
     return want.every(([, v]) => v !== undefined) && w.docs.some(d => d.path === table && want.every(([col, v]) => deepEqual(d.data[col], v)))
   }
   const path = fill(w, doc)
-  return path !== undefined && (path === w.targetPath || w.docs.some(d => d.path === path))
+  if (path !== undefined && path === w.targetPath) return op !== 'create'
+  return path !== undefined && w.docs.some(d => d.path === path)
 }
 
-export function holds(w: World, a: Atom): boolean {
+// `op` is the operation the world is used for; omitted, the record under test exists.
+export function holds(w: World, a: Atom, op?: Op): boolean {
   switch (a.op) {
     case 'authenticated': return w.actor !== null
-    case 'exists': return exists(w, a.doc)
+    case 'exists': return exists(w, a.doc, op)
     case 'isNull': return value(w, a.operand) === null
     case 'eq': {
       const l = value(w, a.left)
