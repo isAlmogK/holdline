@@ -1,4 +1,4 @@
-import { canonicalJson, deepEqual } from './canonical.js'
+import { deepEqual } from './canonical.js'
 import type { Atom, Operand } from './expr.js'
 import { formatAtom } from './format.js'
 import { hashRule } from './hash.js'
@@ -27,7 +27,7 @@ export function generateTests(rule: Rule, vocab: Vocabulary): TestFile | undefin
     return { ...base, skipped: ['the requirement must be only "and" of atoms to generate cases; check it statically'] }
   }
   const atoms = parts.map(p => p.atom).filter((a, i, all) => all.findIndex(b => deepEqual(a, b)) === i)
-  const readsRecord = atoms.some(a => canonicalJson(a).includes('resource.'))
+  const readsRecord = atoms.some(readsStoredRecord)
   try {
     const satisfied = satisfy(atoms, rule)
     for (const op of rule.ops) {
@@ -114,7 +114,7 @@ function toCase(name: string, w: World, dataWorld: World, rule: DataAccessRule, 
   const path = rule.target.store === 'postgres' ? storePath(rule) : concretize(targetPath(rule), p => w.params[p] ?? `${p}-1`)
   const record = structuredClone(w.resource)
   const seed = structuredClone([...(op === 'create' ? [] : [{ path: storePath(rule), data: record }]), ...w.docs])
-  const data = op === 'create' || op === 'update' ? structuredClone({ ...dataWorld.resource, ...dataWorld.incoming }) : undefined
+  const data = op === 'create' || op === 'update' ? structuredClone({ ...dataWorld.resource, ...w.incoming }) : undefined
   const listPath = path.split('/').slice(0, -1).join('/')
   return {
     name,
@@ -127,6 +127,14 @@ function toCase(name: string, w: World, dataWorld: World, rule: DataAccessRule, 
 
 function storePath(rule: DataAccessRule): string {
   return rule.target.store === 'postgres' ? rule.target.table.includes('.') ? rule.target.table : `public.${rule.target.table}` : targetPath(rule)
+}
+
+function readsStoredRecord(a: Atom): boolean {
+  const isResource = (o: unknown) => typeof o === 'string' && o.startsWith('resource.')
+  if (a.op === 'exists') return a.doc.includes('{resource.')
+  if (a.op === 'authenticated') return false
+  if (a.op === 'isNull') return isResource(a.operand)
+  return Object.values(a).some(isResource)
 }
 
 function literalValue(o: Operand): unknown {
