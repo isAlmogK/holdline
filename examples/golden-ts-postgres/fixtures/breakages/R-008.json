@@ -1,0 +1,1 @@
+{ "rule": "R-008", "description": "A PATCH handler updates dogs without the repository", "patch": [{ "op": "add", "path": "/dataOps/-", "value": { "in": "ts:src/routes/dogs#patchDog", "store": "postgres", "target": "public.dogs", "op": "update" } }] }

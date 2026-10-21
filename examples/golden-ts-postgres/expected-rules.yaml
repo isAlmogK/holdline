@@ -1,0 +1,222 @@
+version: 1
+vocabulary: []
+rules:
+  - id: R-001
+    text: Only admins can transfer dogs between teams
+    type: access
+    target:
+      routes: POST /dogs/*/transfer
+    requires:
+      atom:
+        op: in
+        left: actor.role
+        right:
+          literal:
+            - admin
+    evidence:
+      - route:POST /dogs/:id/transfer
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: bafc42d0dbd5
+  - id: R-002
+    text: Only trainers and admins can add dogs
+    type: access
+    target:
+      routes: POST /dogs
+    requires:
+      atom:
+        op: in
+        left: actor.role
+        right:
+          literal:
+            - trainer
+            - admin
+    evidence:
+      - route:POST /dogs
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 02ba39416df9
+  - id: R-003
+    text: Every admin page is for admins only
+    type: access
+    target:
+      routes: "* /admin/**"
+    requires:
+      atom:
+        op: in
+        left: actor.role
+        right:
+          literal:
+            - admin
+    evidence:
+      - route:GET /admin/users
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: a282693d49e1
+  - id: R-004
+    text: Every dog endpoint requires sign-in
+    type: access
+    target:
+      routes: "* /dogs/**"
+    requires:
+      atom:
+        op: authenticated
+    evidence:
+      - ts:src/middleware/auth#requireAuth
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: a4f95e1307db
+  - id: R-005
+    text: Deleted dogs are never returned
+    type: visibility
+    target:
+      store: postgres
+      table: dogs
+    requires:
+      atom:
+        op: isNull
+        operand: resource.deleted_at
+    via: []
+    evidence:
+      - ts:src/repositories/dogs#DogRepository.list
+      - ts:src/repositories/dogs#DogRepository.findById
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 85d57aafe1bc
+  - id: R-006
+    text: Deleted teams are never returned
+    type: visibility
+    target:
+      store: postgres
+      table: teams
+    requires:
+      atom:
+        op: isNull
+        operand: resource.deleted_at
+    via: []
+    evidence:
+      - ts:src/repositories/teams#TeamRepository.list
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 73fd4420e3be
+  - id: R-007
+    text: Transfer records are only written by the transfer service
+    type: flow
+    target:
+      store: postgres
+      table: transfers
+    ops:
+      - create
+      - update
+      - delete
+    via:
+      - ts:src/services/transfer#TransferService.transfer
+    evidence:
+      - ts:src/services/transfer#TransferService.transfer
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: d584bf0943da
+  - id: R-008
+    text: Dogs are only changed through the dog repository
+    type: flow
+    target:
+      store: postgres
+      table: dogs
+    ops:
+      - update
+      - delete
+    via:
+      - ts:src/repositories/dogs#DogRepository
+    evidence:
+      - ts:src/repositories/dogs#DogRepository
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: e8f4f93a0fcf
+  - id: R-009
+    text: Every dog belongs to a team
+    type: invariant
+    target:
+      store: postgres
+      table: dogs
+    kind: not-null
+    columns:
+      - team_id
+    evidence:
+      - pg:public.dogs
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: c36c96057ab5
+  - id: R-010
+    text: A dog's team must exist
+    type: invariant
+    target:
+      store: postgres
+      table: dogs
+    kind: fk
+    columns:
+      - team_id
+    references:
+      table: public.teams
+      columns:
+        - id
+    evidence:
+      - pg:public.dogs
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 901517e74b39
+  - id: R-011
+    text: A user's role is admin, trainer or member
+    type: invariant
+    target:
+      store: postgres
+      table: users
+    kind: enum
+    columns:
+      - role
+    values:
+      - admin
+      - trainer
+      - member
+    evidence:
+      - pg:public.users
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: d48d383550e7
+  - id: R-012
+    text: No two users share an email address
+    type: invariant
+    target:
+      store: postgres
+      table: users
+    kind: unique
+    columns:
+      - email
+    evidence:
+      - pg:public.users
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 2611a88405ca

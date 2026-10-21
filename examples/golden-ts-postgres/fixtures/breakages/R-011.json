@@ -1,0 +1,1 @@
+{ "rule": "R-011", "description": "A new owner role appears", "patch": [{ "op": "replace", "path": "/tables/0/enums/0/values", "value": ["admin", "trainer", "member", "owner"] }] }

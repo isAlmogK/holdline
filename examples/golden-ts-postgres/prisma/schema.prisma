@@ -1,0 +1,62 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  trainer
+  member
+
+  @@map("user_role")
+}
+
+model Team {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String
+  deletedAt DateTime? @map("deleted_at")
+  dogs      Dog[]
+  users     User[]
+
+  @@map("teams")
+}
+
+model User {
+  id     String   @id @default(uuid()) @db.Uuid
+  email  String   @unique
+  role   UserRole @default(member)
+  teamId String?  @map("team_id") @db.Uuid
+  team   Team?    @relation(fields: [teamId], references: [id])
+  dogs   Dog[]
+
+  @@map("users")
+}
+
+model Dog {
+  id        String     @id @default(uuid()) @db.Uuid
+  name      String
+  teamId    String     @map("team_id") @db.Uuid
+  ownerId   String?    @map("owner_id") @db.Uuid
+  deletedAt DateTime?  @map("deleted_at")
+  team      Team       @relation(fields: [teamId], references: [id])
+  owner     User?      @relation(fields: [ownerId], references: [id])
+  transfers Transfer[]
+
+  @@map("dogs")
+}
+
+model Transfer {
+  id         String   @id @default(uuid()) @db.Uuid
+  dogId      String   @map("dog_id") @db.Uuid
+  fromTeamId String   @map("from_team_id") @db.Uuid
+  toTeamId   String   @map("to_team_id") @db.Uuid
+  byUserId   String   @map("by_user_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+  dog        Dog      @relation(fields: [dogId], references: [id])
+
+  @@map("transfers")
+}

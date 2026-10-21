@@ -1,0 +1,1 @@
+{ "rule": "R-009", "description": "dogs.team_id becomes nullable", "patch": [{ "op": "replace", "path": "/tables/2/columns/2/nullable", "value": true }] }

@@ -1,0 +1,1 @@
+{ "rule": "R-004", "description": "GET /dogs/:id loses requireAuth", "patch": [{ "op": "replace", "path": "/routes/1/middleware", "value": [] }] }

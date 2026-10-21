@@ -1,0 +1,1 @@
+{ "rule": "R-002", "description": "Members may now add dogs", "patch": [{ "op": "replace", "path": "/guards/1/requires/atom/right", "value": { "literal": ["trainer", "admin", "member"] } }] }

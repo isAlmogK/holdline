@@ -10,6 +10,7 @@
     "holdline": "tsx packages/cli/src/bin.ts"
   },
   "devDependencies": {
+    "@holdline/core": "workspace:*",
     "@types/node": "^22.20.5",
     "fast-check": "^4.10.2",
     "tsx": "^4.23.15",
