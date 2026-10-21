@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { RuleSchema, hashRule, serializeRulesFile, type RulesFile } from '@holdline/core'
+import { RuleSchema, hashRule, parseRulesFile, serializeRulesFile, type RulesFile } from '@holdline/core'
 import { describe, expect, it } from 'vitest'
 import { makeProject, runCli } from './helpers/project.js'
 
@@ -111,5 +111,27 @@ describe('holdline explain and mute', () => {
     expect((await runCli(['check', '--facts', 'facts.json'], { cwd: root })).code).toBe(0)
     const ex = await runCli(['explain', 'R-001', '--facts', 'facts.json'], { cwd: root })
     expect(ex.stdout).toContain('muted, not enforced')
+  })
+  it('lists muted rules in every format', async () => {
+    const root = await makeProject({ 'holdline.rules': rulesFile(admin), 'facts.json': facts })
+    await runCli(['mute', 'R-001', '--reason', 'migrating auth'], { cwd: root })
+    const human = await runCli(['check', '--facts', 'facts.json'], { cwd: root })
+    expect(human.stdout).toContain('- R-001 muted by tester on 2026-10-21: migrating auth')
+    const agent = await runCli(['check', '--facts', 'facts.json', '--format', 'agent'], { cwd: root })
+    expect(agent.stdout.split('\n')[0]).toBe('Holdline: no approved rules to check. 1 rule muted: R-001 (migrating auth)')
+    const json = JSON.parse((await runCli(['check', '--facts', 'facts.json', '--format', 'json'], { cwd: root })).stdout)
+    expect(json.mutedRules).toEqual([{ id: 'R-001', text: 'Only admins transfer dogs', by: 'tester', at: '2026-10-21', reason: 'migrating auth' }])
+  })
+  it('appends muted rules to the agent summary line', async () => {
+    const two = parseRulesFile(rulesFile(auth))
+    const second = { ...two.rules[0]!, id: 'R-002', status: 'muted' as const, muted: { by: 'a', at: '2026-10-20', reason: 'noisy' } }
+    const root = await makeProject({ 'holdline.rules': serializeRulesFile({ ...two, rules: [two.rules[0]!, second] }), 'facts.json': facts })
+    const out = await runCli(['check', '--facts', 'facts.json', '--format', 'agent'], { cwd: root })
+    expect(out.stdout.split('\n')[0]).toBe('Holdline: all 1 approved rule passes. 1 rule muted: R-002 (noisy)')
+  })
+  it('agent format says so when there are no approved rules', async () => {
+    const root = await makeProject({ 'facts.json': facts })
+    const out = await runCli(['check', '--facts', 'facts.json', '--format', 'agent'], { cwd: root })
+    expect(out.stdout).toBe('Holdline: no approved rules to check.\n')
   })
 })
