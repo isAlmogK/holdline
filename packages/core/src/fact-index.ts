@@ -7,10 +7,14 @@ const POLICY_STORE = { postgres: 'pg-rls', firestore: 'firestore', storage: 'sto
 export class FactIndex {
   private readonly locations = new Map<string, Location | undefined>()
   private readonly callersOf = new Map<string, string[]>()
+  private readonly handlerOf = new Map<string, string>()
 
   constructor(readonly facts: Facts) {
     for (const s of facts.symbols) this.locations.set(s.id, s.location)
-    for (const r of facts.routes) if (!this.locations.has(r.id)) this.locations.set(r.id, undefined)
+    for (const r of facts.routes) {
+      if (!this.locations.has(r.id)) this.locations.set(r.id, undefined)
+      this.handlerOf.set(r.id, r.handler)
+    }
     for (const t of facts.tables) this.locations.set(t.id, t.location)
     for (const p of facts.policies) this.locations.set(p.id, p.evidence)
     for (const [from, to] of facts.calls) this.callersOf.set(to, [...(this.callersOf.get(to) ?? []), from])
@@ -20,13 +24,15 @@ export class FactIndex {
     return this.locations.has(id)
   }
 
+  // A route without its own location reports its handler's location.
   at(id: string): { symbol: string; file?: string; line?: number } {
-    const loc = this.locations.get(id)
+    const handler = this.handlerOf.get(id)
+    const loc = this.locations.get(id) ?? (handler ? this.locations.get(handler) : undefined)
     return loc ? { symbol: id, file: loc.file, line: loc.line } : { symbol: id }
   }
 
   fileOf(id: string): string | undefined {
-    return this.locations.get(id)?.file
+    return this.at(id).file
   }
 
   routesMatching(selector: string): Route[] {
@@ -65,13 +71,29 @@ export class FactIndex {
 
   // True when every call path that reaches `symbol` passes through a symbol in `via`.
   // A `via` entry also covers its members: `ts:x#Repo` covers `ts:x#Repo.update`.
-  coveredBy(symbol: string, via: readonly string[], visiting: ReadonlySet<string> = new Set()): boolean {
-    if (via.some(v => symbol === v || symbol.startsWith(`${v}.`))) return true
-    if (visiting.has(symbol)) return false
-    const callers = this.callersOf.get(symbol) ?? []
-    if (callers.length === 0) return false
-    const next = new Set([...visiting, symbol])
-    return callers.every(c => this.coveredBy(c, via, next))
+  // Linear walk upward over callers: a via node stops its branch, an uncovered node
+  // with no callers is an entry point the walk can reach (false). A cycle with no
+  // entry point counts as covered only if it contains a via node (sawVia).
+  coveredBy(symbol: string, via: readonly string[]): boolean {
+    const inVia = (id: string): boolean => via.some(v => id === v || id.startsWith(`${v}.`))
+    if (inVia(symbol)) return true
+    const seen = new Set<string>([symbol])
+    const stack = [symbol]
+    let sawVia = false
+    while (stack.length > 0) {
+      const node = stack.pop()!
+      const callers = this.callersOf.get(node) ?? []
+      if (callers.length === 0) return false
+      for (const c of callers) {
+        if (inVia(c)) {
+          sawVia = true
+        } else if (!seen.has(c)) {
+          seen.add(c)
+          stack.push(c)
+        }
+      }
+    }
+    return sawVia
   }
 
   errorFiles(): Set<string> {
