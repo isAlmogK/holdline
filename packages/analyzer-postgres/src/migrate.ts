@@ -28,6 +28,15 @@ export async function runMigrations(migrations: readonly Migration[], dialect: D
   const { uuid_ossp } = await import('@electric-sql/pglite/contrib/uuid_ossp')
   const { pgcrypto } = await import('@electric-sql/pglite/contrib/pgcrypto')
   const db = await PGlite.create({ extensions: { uuid_ossp, pgcrypto } })
+  try {
+    return await apply(db, migrations, dialect)
+  } catch (e) {
+    await db.close() // the caller gets no run to close
+    throw e
+  }
+}
+
+async function apply(db: PGlite, migrations: readonly Migration[], dialect: Dialect): Promise<MigrationRun> {
   const run: MigrationRun = { db, dialect, migrations: [...migrations] }
   if (dialect === 'supabase') await db.exec(SUPABASE_SHIM)
   const searchPath = dialect === 'supabase' ? SEARCH_PATH.supabase : (await db.query<{ search_path: string }>('show search_path')).rows[0]!.search_path
