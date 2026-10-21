@@ -159,3 +159,23 @@ describe('inlining limits', () => {
     expect(JSON.stringify(result)).toContain('"resource.a"')
   })
 })
+
+describe('binding limits', () => {
+  /** `let a<i> = step(a<i-1>)` for i in 1..n-1, each binding referenced twice by the next. */
+  const chain = (n: number, first: string, step: (prev: string) => string, ret: string) =>
+    `function f() { let a0 = ${first}; ${Array.from({ length: n - 1 }, (_, i) => `let a${i + 1} = ${step(`a${i}`)};`).join(' ')} return ${ret.replace('LAST', `a${n - 1}`)}; }`
+  it('30 chained lets, each used twice in condition position, finish fast and turn opaque past the budget', () => {
+    const before = chain(30, 'resource.data.a == 1', p => `${p} && ${p}`, 'LAST')
+    const t = performance.now()
+    const result = cond('f()', { before })
+    expect(performance.now() - t).toBeLessThan(1000)
+    expect(JSON.stringify(result)).toContain('"opaque"')
+  })
+  it('30 chained lets, each used twice in value position, finish fast and turn opaque', () => {
+    const before = chain(30, `'k'`, p => `resource.data.get(${p}, ${p})`, 'LAST == 1')
+    const t = performance.now()
+    const result = cond('f()', { before })
+    expect(performance.now() - t).toBeLessThan(1000)
+    expect(JSON.stringify(result)).toContain('"opaque"')
+  })
+})

@@ -35,15 +35,23 @@ export interface Env {
   bindings: ReadonlyMap<string, Binding>
   depth: number
   active: ReadonlySet<FunctionDef>
-  budget: { inlines: number }
+  budget: { inlines: number; bindings: number }
 }
 
 /** How many function inlines one condition may make; past it, further calls are opaque. */
 export const MAX_INLINES_PER_CONDITION = 1000
 
+/**
+ * How many param or let references one condition may resolve. Each reference re-reads its bound expression,
+ * so `let a1 = a0 && a0; let a2 = a1 && a1; …` doubles per let; past it, a reference is opaque.
+ */
+export const MAX_BINDING_RESOLUTIONS_PER_CONDITION = 10000
+
 /** A fresh env for one condition: call it once per normalized condition. */
-export const rootEnv = (scope: Scope): Env =>
-  ({ scope, bindings: new Map(), depth: 0, active: new Set(), budget: { inlines: MAX_INLINES_PER_CONDITION } })
+export const rootEnv = (scope: Scope): Env => ({
+  scope, bindings: new Map(), depth: 0, active: new Set(),
+  budget: { inlines: MAX_INLINES_PER_CONDITION, bindings: MAX_BINDING_RESOLUTIONS_PER_CONDITION },
+})
 
 /** Declarations per function name across the whole file, at every level. */
 export function countFunctions(ast: RulesAst): Map<string, number> {

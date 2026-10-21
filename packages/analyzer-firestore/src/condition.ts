@@ -77,7 +77,11 @@ export function normalizeCondition(node: Node, env: Env, ctx: NormalizeContext):
     case 'ident': {
       // A param or let: the expression it is bound to, read as a condition in the env it was written in.
       const binding = env.bindings.get(node.name)
-      if (binding) return normalizeCondition(binding.node, binding.env, ctx)
+      if (binding) {
+        if (env.budget.bindings <= 0) return opaque(node, ctx)
+        env.budget.bindings--
+        return normalizeCondition(binding.node, binding.env, ctx)
+      }
       break
     }
     case 'call': {

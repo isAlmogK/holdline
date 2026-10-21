@@ -95,7 +95,11 @@ function resolveCall(node: Extract<Node, { type: 'call' }>, env: Env, ctx: Norma
 
 function resolveIdent(name: string, env: Env, ctx: NormalizeContext): Value | undefined {
   const binding = env.bindings.get(name)
-  if (binding) return resolveValue(binding.node, binding.env, ctx)
+  if (binding) {
+    if (env.budget.bindings <= 0) return undefined
+    env.budget.bindings--
+    return resolveValue(binding.node, binding.env, ctx)
+  }
   if (env.scope.isWildcard(name)) {
     // A rest wildcard holds a path; comparing it as a string would not be exact.
     return env.scope.isRestWildcard(name) ? undefined : operand(`param.${name}`, false)
