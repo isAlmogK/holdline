@@ -27,11 +27,27 @@ describe('atomImplies', () => {
     expect(atomImplies(inSet(['admin', 'member']), inSet(['admin', 'owner']))).toBe(false)
     expect(atomImplies({ op: 'eq', left: 'actor.role', right: { literal: 'owner' } }, inSet(['admin', 'owner']))).toBe(true)
   })
-  it('any actor-dependent atom implies authenticated', () => {
-    expect(atomImplies({ op: 'eq', left: 'actor.uid', right: 'resource.owner_id' }, { op: 'authenticated' })).toBe(true)
-    expect(atomImplies({ op: 'exists', doc: '/m/{actor.uid}' }, { op: 'authenticated' })).toBe(true)
-    expect(atomImplies({ op: 'isNull', operand: 'resource.deleted_at' }, { op: 'authenticated' })).toBe(false)
-    expect(atomImplies({ op: 'authenticated' }, { op: 'eq', left: 'actor.uid', right: 'resource.owner_id' })).toBe(false)
+  it('only atoms that fail for anonymous callers imply authenticated', () => {
+    const auth: Atom = { op: 'authenticated' }
+    expect(atomImplies({ op: 'exists', doc: '/m/{actor.uid}' }, auth)).toBe(true)
+    expect(atomImplies({ op: 'eq', left: 'actor.role', right: { literal: 'admin' } }, auth)).toBe(true)
+    expect(atomImplies({ op: 'in', left: 'actor.role', right: { literal: ['admin'] } }, auth)).toBe(true)
+    expect(atomImplies({ op: 'eq', left: 'actor.uid', right: 'resource.owner_id' }, auth)).toBe(false)
+    expect(atomImplies({ op: 'isNull', operand: 'actor.uid' }, auth)).toBe(false)
+    expect(atomImplies({ op: 'ne', left: 'actor.role', right: { literal: 'admin' } }, auth)).toBe(false)
+    expect(atomImplies({ op: 'eq', left: 'actor.uid', right: { literal: null } }, auth)).toBe(false)
+    expect(atomImplies({ op: 'isNull', operand: 'resource.deleted_at' }, auth)).toBe(false)
+    expect(atomImplies(auth, { op: 'eq', left: 'actor.uid', right: 'resource.owner_id' })).toBe(false)
+  })
+  it('an in-atom implies itself, whatever its operands', () => {
+    const own: Atom = { op: 'in', left: 'actor.uid', right: 'resource.editors' }
+    expect(atomImplies(own, own)).toBe(true)
+    const claim: Atom = { op: 'in', left: { literal: 'admin' }, right: 'actor.claim.roles' }
+    expect(atomImplies(claim, claim)).toBe(true)
+    expect(atomImplies(
+      { op: 'in', left: 'actor.role', right: { literal: 'admin' } },
+      { op: 'in', left: 'actor.role', right: { literal: ['admin', 'owner'] } },
+    )).toBe(false)
   })
   it('compares exists docs and isNull operands exactly', () => {
     expect(atomImplies({ op: 'exists', doc: '/a/{x}' }, { op: 'exists', doc: '/a/{x}' })).toBe(true)
@@ -55,6 +71,7 @@ describe('implies', () => {
   it('false (no policies) implies anything; nothing implies false', () => {
     expect(implies({ or: [] }, member, noVocab)).toEqual({ ok: true })
     expect(implies(member, { or: [] }, noVocab).ok).toBe(false)
+    expect(implies({ or: [] }, { opaque: 'x' }, noVocab)).toEqual({ ok: true })
   })
   it('opaque never proves anything, not even itself', () => {
     expect(implies({ opaque: 'x' }, { opaque: 'x' }, noVocab).ok).toBe(false)
@@ -74,7 +91,7 @@ describe('implies', () => {
 })
 
 describe('properties', () => {
-  const atoms: Expr[] = [member, owner, admin, notDeleted, a({ op: 'authenticated' })]
+  const atoms: Expr[] = [member, owner, admin, notDeleted, a({ op: 'authenticated' }), a({ op: 'in', left: 'actor.uid', right: 'resource.editors' })]
   const expr: fc.Arbitrary<Expr> = fc.letrec<{ e: Expr }>(tie => ({
     e: fc.oneof(
       { depthSize: 'small', withCrossShrink: true },
