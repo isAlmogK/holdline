@@ -3,15 +3,18 @@ import { isLookupOperand, type Atom } from './expr.js'
 import { formatAtom } from './format.js'
 import { hashRule } from './hash.js'
 import { expand, flattenAnd, type Vocabulary } from './logic.js'
-import type { Rule } from './rules.js'
+import type { InvariantRule, Rule } from './rules.js'
 import type { TestCase, TestFile } from './testcase.js'
+import type { Facts } from './facts.js'
 import { toCase } from './testgen-case.js'
 import { denyWorld } from './testgen-deny.js'
 import { holds } from './testgen-eval.js'
+import { postgresInvariantCases } from './testgen-invariant.js'
 import { satisfy } from './testgen-satisfy.js'
 import { Unsupported, type World } from './testgen-world.js'
 
-export function generateTests(rule: Rule, vocab: Vocabulary): TestFile | undefined {
+export function generateTests(rule: Rule, vocab: Vocabulary, facts?: Facts): TestFile | undefined {
+  if (rule.type === 'invariant') return invariantTests(rule, vocab, facts)
   if (rule.type !== 'data-access') return undefined
   const base = { rule: rule.id, generatedFrom: hashRule(rule, vocab), store: rule.target.store, cases: [] as TestCase[], skipped: [] as string[] }
   const parts = flattenAnd(expand(rule.requires, vocab))
@@ -66,3 +69,10 @@ function reads(a: Atom, root: 'resource' | 'incoming'): boolean {
 const readsStoredRecord = (a: Atom) => reads(a, 'resource')
 // Only create and update send data, so a condition on it cannot be tested on read, list or delete.
 const readsIncoming = (a: Atom) => reads(a, 'incoming')
+
+function invariantTests(rule: InvariantRule, vocab: Vocabulary, facts: Facts | undefined): TestFile {
+  const base = { rule: rule.id, generatedFrom: hashRule(rule, vocab), store: rule.target.store }
+  if (rule.target.store === 'storage') return { ...base, cases: [], skipped: ['storage invariants are not generated; check them statically'] }
+  if (rule.target.store === 'postgres') return { ...base, ...postgresInvariantCases(rule as InvariantRule & { target: { store: 'postgres' } }, facts) }
+  return { ...base, cases: [], skipped: ['firestore invariants are not generated yet'] }
+}
