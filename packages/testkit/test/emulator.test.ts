@@ -1,8 +1,10 @@
 import { execFileSync } from 'node:child_process'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { FIREBASE_INSTALL_HINT, runOnEmulator, shellQuote, toolsMissing, workerCommand } from '../src/emulator.js'
 import { toMetadata } from '../src/firebase-ops.js'
-import { bin } from './helpers.js'
+import { bin, FAKE_CLI, removeScratch } from './helpers.js'
+
+afterEach(removeScratch)
 
 describe('runOnEmulator', () => {
   it('reports a missing firebase binary as infrastructure with the install hint', async () => {
@@ -13,7 +15,7 @@ describe('runOnEmulator', () => {
     const dir = await bin({ firebase: 'echo 13.0.0' })
     const r = await runOnEmulator({ firestoreRules: 'x', files: [] }, { PATH: dir })
     expect(r).toEqual({ infra: `Java is not installed: ${FIREBASE_INSTALL_HINT}` })
-  })
+  }, FAKE_CLI)
   it('reports an emulator that does not start with the output tail and the hint when Java is mentioned', async () => {
     const dir = await bin({
       firebase: 'if [ "$1" = "--version" ]; then echo 15.0.0; exit 0; fi\necho starting\necho "firebase-tools no longer supports Java version before 21" >&2\nexit 1',
@@ -22,7 +24,7 @@ describe('runOnEmulator', () => {
     const r = await runOnEmulator({ firestoreRules: 'x', files: [] }, { PATH: dir })
     expect('infra' in r && r.infra).toMatch(/^the Firebase emulator did not start: starting\nfirebase-tools no longer supports Java version before 21/)
     expect('infra' in r && r.infra).toContain(FIREBASE_INSTALL_HINT)
-  })
+  }, FAKE_CLI)
   it('leaves the hint out when the output does not mention Java', async () => {
     const dir = await bin({
       firebase: 'if [ "$1" = "--version" ]; then exit 0; fi\necho "port taken"\nexit 1',
@@ -30,7 +32,7 @@ describe('runOnEmulator', () => {
     })
     const r = await runOnEmulator({ firestoreRules: 'x', files: [] }, { PATH: dir })
     expect(r).toEqual({ infra: 'the Firebase emulator did not start: port taken' })
-  })
+  }, FAKE_CLI)
 })
 
 // The words a POSIX shell (as `firebase emulators:exec` runs its command) makes of `command`.

@@ -107,7 +107,7 @@ async function exec(input: FirebaseInput, env: NodeJS.ProcessEnv, timeoutMs: num
     return { infra: `the Firebase emulator did not start: ${tail(exit.output)}${hint}` }
   } finally {
     // However the run ended (a CLI that crashed leaves the Firestore JVM running), nothing it started outlives it.
-    if (cli !== undefined) await stopAll(cli, basename(dir))
+    if (cli !== undefined) await stopAll({ group: cli, marker: basename(dir) })
     await rm(dir, { recursive: true, force: true })
   }
 }

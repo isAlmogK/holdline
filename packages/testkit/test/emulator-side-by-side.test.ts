@@ -1,11 +1,12 @@
-import { mkdtemp, readdir, readFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { TestCase, TestFile } from '@holdline/core'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { runOnEmulator } from '../src/emulator.js'
 import type { FirebaseInput } from '../src/firebase-runner.js'
-import { bin, skipReason } from './helpers.js'
+import { bin, FAKE_CLI, removeScratch, scratch, skipReason } from './helpers.js'
+
+afterEach(removeScratch)
 
 // A fake firebase that records, per run, the config it got, the TMPDIR it saw, whether that exists, and its run
 // directory (where the config lives). `emulators:exec --only … --project … --config <path> <command>`: $7 is the path.
@@ -14,15 +15,15 @@ const recorder = [
   'cp "$7" "$REC/$$.json"',
   'if [ -d "$TMPDIR" ]; then made=yes; else made=no; fi',
   'printf "%s\\n%s\\n%s" "$TMPDIR" "$made" "$(dirname "$7")" > "$REC/$$.env"',
-  'sleep 1',
   'exit 1',
 ].join('\n')
 
 // Two emulator suites share os.tmpdir(): the Storage emulator keeps its blobs in <tmp>/firebase/storage/blobs and
 // deletes that directory when it stops, which crashes the other suite's next upload. The Firestore websocket port
-// defaults to 9150 for every suite. Each run gets its own of both.
-it('gives runs side by side their own temp directory and Firestore websocket port', async () => {
-  const rec = await mkdtemp(join(tmpdir(), 'holdline-rec-'))
+// defaults to 9150 for every suite. Each run gets its own temp directory and a pinned websocket port (two free-port
+// probes at the same moment can return the same port, so distinct ports are not asserted).
+it('gives runs side by side their own temp directory and a pinned Firestore websocket port', async () => {
+  const rec = await scratch('holdline-rec-')
   const dir = await bin({ firebase: recorder, java: 'exit 0' })
   const env = { PATH: `${dir}:/usr/bin:/bin`, REC: rec }
   const input = { firestoreRules: 'x', files: [] }
@@ -41,8 +42,7 @@ it('gives runs side by side their own temp directory and Firestore websocket por
     expect(run.websocket).toEqual(expect.any(Number))
   }
   expect(runs[0]!.tmp).not.toBe(runs[1]!.tmp)
-  expect(runs[0]!.websocket).not.toBe(runs[1]!.websocket)
-})
+}, FAKE_CLI)
 
 const storageRules = `rules_version = '2';
 service firebase.storage { match /b/{bucket}/o { match /f/{name} { allow read, write: if request.auth != null; } } }`
