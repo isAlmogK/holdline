@@ -27,6 +27,9 @@ These are the interface between parallel tracks. Changing one means updating the
 | DB test cases (`.holdline/tests/*.yaml`) | `packages/core/src/testcase.ts` |
 | Analyzer contract | `packages/core/src/analyzer.ts` |
 
+Reference docs (keep true when a contract changes): [docs/reference/facts.md](docs/reference/facts.md),
+[docs/reference/rules-file.md](docs/reference/rules-file.md).
+
 ## Layout
 
 | Folder | What |
