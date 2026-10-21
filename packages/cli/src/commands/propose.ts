@@ -16,7 +16,12 @@ export async function proposeCommand(source: string, opts: { facts?: string; lim
     if (!io.stdin) throw new UsageError('no stdin to read proposals from')
     text = await readStream(io.stdin)
   } else {
-    text = await readFile(isAbsolute(source) ? source : join(io.cwd, source), 'utf8')
+    try {
+      text = await readFile(isAbsolute(source) ? source : join(io.cwd, source), 'utf8')
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new UsageError(`proposals file not found: ${source}`)
+      throw e
+    }
   }
   let json: unknown
   try {

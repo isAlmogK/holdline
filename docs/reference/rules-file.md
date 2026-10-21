@@ -221,10 +221,10 @@ the results. `--rule` limits the run to those rule ids; an id that is not in `ho
 
 | Exit | When |
 |---|---|
-| 0 | No violation and no unapproved edit (stale and unknown results allowed without `--strict`) |
-| 1 | A violation or an unapproved edit; with `--strict`, also a stale or unknown result |
-| 2 | Usage or config error: bad arguments, unknown `--rule` id, malformed `holdline.rules` or facts file |
-| 3 | Internal error |
+| 0 | `check`: no violation and no unapproved edit (stale and unknown results allowed without `--strict`) |
+| 1 | `check`: a violation or an unapproved edit; with `--strict`, also a stale or unknown result |
+| 2 | Any command: usage or config error. Bad arguments, an unknown `--rule` id, a malformed `holdline.rules`, facts file or `.holdline/pending.yaml` (`PendingFileError`, for both YAML and schema errors), a missing facts file, or a missing proposals file (`proposals file not found: <path>`) |
+| 3 | Any command: internal error. `check` also exits 3 when the facts hold an error diagnostic with `file: ''` (an analyzer crashed): it still prints every result first, then exits 3 whatever the results were |
 
 ## Vocabulary and recognizers
 

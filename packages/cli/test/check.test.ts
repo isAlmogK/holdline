@@ -63,6 +63,17 @@ describe('holdline check', () => {
     const dir = await makeProject({ 'holdline.rules/keep': '' })
     expect((await runCli(['check', '--facts', 'facts.json'], { cwd: dir })).code).toBe(3)
   })
+  it('prints results, then exits 3 when an analyzer crashed', async () => {
+    const crashed = JSON.stringify({ ...JSON.parse(facts), diagnostics: [{ analyzer: 'ts', file: '', message: 'analyzer failed: boom', severity: 'error' }] })
+    const root = await makeProject({ 'holdline.rules': rulesFile(auth), 'facts.json': crashed })
+    const out = await runCli(['check', '--facts', 'facts.json'], { cwd: root })
+    expect(out.code).toBe(3)
+    expect(out.stdout).toContain('R-001')
+    expect(out.stdout).toContain('analyzer errors make this result unreliable: ts: analyzer failed: boom')
+    const fileError = JSON.stringify({ ...JSON.parse(facts), diagnostics: [{ analyzer: 'ts', file: 'src/x.ts', message: 'parse error', severity: 'error' }] })
+    const root2 = await makeProject({ 'holdline.rules': rulesFile(auth), 'facts.json': fileError })
+    expect((await runCli(['check', '--facts', 'facts.json'], { cwd: root2 })).code).toBe(0)
+  })
   it('prints JSON', async () => {
     const root = await makeProject({ 'holdline.rules': rulesFile(admin), 'facts.json': facts })
     const out = await runCli(['check', '--facts', 'facts.json', '--format', 'json'], { cwd: root })

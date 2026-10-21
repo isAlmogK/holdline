@@ -20,6 +20,8 @@ export async function checkCommand(opts: CheckOptions, io: Io): Promise<number> 
     : opts.format === 'agent' ? formatAgent(results, summary, texts, mutedRules)
     : formatHuman(results, summary, texts, mutedRules)
   io.stdout(out)
+  // An analyzer crashed: the results above are printed, but the run itself is an analyzer error.
+  if (facts.diagnostics.some(d => d.severity === 'error' && d.file === '')) return 3
   const failed = summary.violation + summary['unapproved-edit'] > 0
   const strictFailed = !!opts.strict && summary.stale + summary.unknown > 0
   return failed || strictFailed ? 1 : 0

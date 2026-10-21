@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { runChecks } from '../src/check/run.js'
 import { parseFacts } from '../src/facts.js'
-import { addToPending, approve, emptyPending, mute, parsePendingFile, reject, serializePendingFile } from '../src/pending.js'
+import { PendingFileError, addToPending, approve, emptyPending, mute, parsePendingFile, reject, serializePendingFile } from '../src/pending.js'
 import { ProposalError, validateProposals } from '../src/proposals.js'
 import { hashVocabulary } from '../src/hash.js'
 import { emptyRulesFile } from '../src/rules.js'
@@ -140,6 +140,11 @@ describe('pending and approval', () => {
     expect(r.vocabulary.map(v => v.accepted)).toEqual([false])
     const text = serializePendingFile({ ...pending, vocabulary: [{ ...pending.vocabulary[0]!, approved: { by: 'x', at: 'y', hash: 'z' } } as never] })
     expect(() => parsePendingFile(text)).toThrow(/approved/)
+  })
+  it('throws PendingFileError for malformed YAML and schema errors', () => {
+    expect(() => parsePendingFile('rules: [')).toThrow(PendingFileError)
+    expect(() => parsePendingFile('rules: [')).toThrow(/\.holdline\/pending\.yaml: invalid YAML/)
+    expect(() => parsePendingFile('version: 1\nrules: [{ key: X }]')).toThrow(PendingFileError)
   })
   it('rejects proposals that carry approval state, and clamps limit', () => {
     const r = validateProposals({ vocabulary: [staffVocab], rules: [{ ...transferRule, status: 'approved' }, { ...transferRule, approved: { by: 'x', at: 'y', hash: 'z' } }] }, facts, emptyRulesFile())

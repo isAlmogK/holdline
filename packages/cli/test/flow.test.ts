@@ -110,6 +110,18 @@ describe('inference flow', () => {
     expect((await runCli(['propose', '-', '--facts', 'facts.json'], { cwd: root, stdin: 'not json' })).code).toBe(2)
   })
 
+  it('exits 2 on a malformed pending file and on a missing proposals file', async () => {
+    const root = await makeProject({ 'facts.json': facts, '.holdline/pending.yaml': 'rules: [' })
+    const bad = await runCli(['approve', 'P-1'], { cwd: root })
+    expect(bad.code).toBe(2)
+    expect(bad.stderr).toContain('.holdline/pending.yaml: invalid YAML')
+    const root2 = await makeProject({ 'facts.json': facts, '.holdline/pending.yaml': 'version: 1\nrules: [{ key: nope }]' })
+    expect((await runCli(['review'], { cwd: root2, stdin: 'q\n' })).code).toBe(2)
+    const missing = await runCli(['propose', 'missing.json', '--facts', 'facts.json'], { cwd: root })
+    expect(missing.code).toBe(2)
+    expect(missing.stderr).toContain('proposals file not found: missing.json')
+  })
+
   it('reject removes pending rules', async () => {
     const root = await makeProject({ 'facts.json': facts, 'proposals.json': proposals })
     await runCli(['propose', 'proposals.json', '--facts', 'facts.json'], { cwd: root })
