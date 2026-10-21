@@ -36,13 +36,28 @@ describe('Lexer', () => {
     expect(lx.next().value).toBe('a')
   })
   it('reports unterminated strings and comments at their start', () => {
-    expect(() => kinds("x 'abc")).toThrow(ParseError)
-    try { kinds("x\n  'abc") } catch (e) { expect(e).toMatchObject({ line: 2, col: 3 }) }
-    try { kinds('/* never') } catch (e) { expect(e).toMatchObject({ line: 1, col: 1 }) }
+    expect(() => kinds("x 'abc")).toThrow(expect.objectContaining({ name: 'ParseError', line: 1, col: 3 }))
+    expect(() => kinds("x\n  'abc")).toThrow(expect.objectContaining({ line: 2, col: 3 }))
+    expect(() => kinds('/* never')).toThrow(expect.objectContaining({ line: 1, col: 1 }))
   })
   it('reports an unexpected character with its position', () => {
-    try { kinds('a\n #') } catch (e) { expect(e).toMatchObject({ line: 2, col: 2, message: "unexpected character '#'" }) }
+    expect(() => kinds('a\n #')).toThrow(expect.objectContaining({ line: 2, col: 2, message: "unexpected character '#'" }))
     expect(() => kinds('#')).toThrow(ParseError)
+  })
+  it('rejects invalid escapes and raw newlines in strings', () => {
+    expect(() => kinds("'a\\qb'")).toThrow(expect.objectContaining({ line: 1, col: 3 }))
+    expect(() => kinds("'\\u00zz'")).toThrow(expect.objectContaining({ line: 1, col: 2 }))
+    expect(() => kinds("x 'a\nb'")).toThrow(expect.objectContaining({ line: 1, col: 3 }))
+  })
+  it('falls back for 1. and 1.5e', () => {
+    expect(kinds('1.')).toEqual(['int:1', 'punct:.'])
+    expect(kinds('1.5e')).toEqual(['float:1.5', 'ident:e'])
+  })
+  it('peek leaves pos unchanged when it throws', () => {
+    const lx = new Lexer('a #')
+    lx.next()
+    expect(() => lx.peek()).toThrow(ParseError)
+    expect(lx.pos).toBe(1)
   })
   it('lexes / as punct and $ as unexpected', () => {
     expect(kinds('/a/b')).toEqual(['punct:/', 'ident:a', 'punct:/', 'ident:b'])

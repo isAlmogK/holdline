@@ -24,8 +24,11 @@ export class Lexer {
   peek(): Token {
     if (!this.peeked) {
       const before = this.pos
-      this.peeked = this.read()
-      this.pos = before
+      try {
+        this.peeked = this.read()
+      } finally {
+        this.pos = before
+      }
     }
     return this.peeked
   }
