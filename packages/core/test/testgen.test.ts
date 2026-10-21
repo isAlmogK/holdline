@@ -71,8 +71,10 @@ describe('generateTests for postgres', () => {
       { path: 'public.members', data: { team_id: 'value-1', user_id: 'user-1' } },
     ])
     expect(allowRead.do).toEqual({ op: 'read', path: 'public.dogs' })
+    // The claim is pinned first (no other atom reads it); the membership row keyed on the record stays.
     const denyClaim = file.cases[1]!
-    expect(denyClaim.seed[0]!.data).toEqual({ team_id: 'other-value' })
+    expect(denyClaim.as).toEqual({ uid: 'user-1', claims: { team_id: 'other-value' } })
+    expect(denyClaim.seed).toEqual(allowRead.seed)
     expect(file.cases.filter(c => c.do.op === 'update')[0]!.do.data).toEqual({ team_id: 'value-1' })
   })
 })
@@ -115,13 +117,15 @@ describe('generateTests fails loudly instead of guessing', () => {
   it('skips literal and actor.uid targets', () => {
     skippedOnly(fs({ atom: { op: 'eq', left: 'actor.uid', right: { literal: 'admin' } } }))
   })
-  it('skips exists placeholders nothing sets', () => {
+  it('skips exists placeholders it cannot make a value for', () => {
     skippedOnly(rule({
       type: 'data-access',
       target: { store: 'postgres', table: 'dogs' },
       ops: ['read'],
-      requires: { atom: { op: 'exists', doc: 'pg:public.m?o={resource.owner}' } },
+      requires: { atom: { op: 'exists', doc: 'pg:public.m?o={actor.claim.org}' } },
     }))
+    const f = generateTests(fs({ atom: { op: 'exists', doc: '/orgs/{actor.claim.orgId}' } }), vocab)!
+    expect(f.skipped).toEqual([expect.stringMatching(/cannot resolve \{actor\.claim\.orgId\}/)])
   })
   it('serializes without YAML anchors', () => {
     const f = generateTests(fs({ atom: { op: 'exists', doc: '/m/{actor.uid}' } }, ['read', 'update', 'delete']), vocab)!
@@ -413,5 +417,66 @@ describe('ops that send no data', () => {
     }), vocab)!
     expect(viaLookup.cases).toEqual([])
     expect(viaLookup.skipped).toEqual(['delete: the condition reads the incoming write, which delete does not send'])
+  })
+})
+
+describe('exists keyed on a record field nothing else sets', () => {
+  // The deny case for the exists atom must equal the allow case except for the missing row or doc.
+  const onlyMissing = (f: ReturnType<typeof generateTests>, op: string, missing: string) => {
+    const cases = f!.cases.filter(c => c.do.op === op)
+    const allow = cases.find(c => c.expect === 'allow')!
+    const deny = cases.find(c => c.name.startsWith(`${op}: denied without exists(`))!
+    expect(allow.seed.some(s => s.path === missing)).toBe(true)
+    expect({ ...deny, name: allow.name, expect: 'allow' }).toEqual({ ...allow, seed: allow.seed.filter(s => s.path !== missing) })
+  }
+
+  it('makes a value for the placeholder of a postgres membership row', () => {
+    const f = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'postgres', table: 'projects' },
+      ops: ['read'],
+      requires: { and: [
+        { atom: { op: 'authenticated' } },
+        { atom: { op: 'exists', doc: 'pg:public.memberships?org_id={resource.org_id}&user_id={actor.uid}' } },
+      ] },
+    }), vocab)!
+    expect(f.skipped).toEqual([])
+    expect(f.cases.map(c => c.expect)).toEqual(['allow', 'deny', 'deny'])
+    expect(f.cases[0]!.seed).toEqual([
+      { path: 'public.projects', data: { org_id: 'value-1' } },
+      { path: 'public.memberships', data: { org_id: 'value-1', user_id: 'user-1' } },
+    ])
+    onlyMissing(f, 'read', 'public.memberships')
+  })
+
+  it('makes a value for the placeholder of a firestore member doc', () => {
+    const f = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'firestore', path: '/projects/{projectId}' },
+      ops: ['read', 'update'],
+      requires: { and: [
+        { atom: { op: 'authenticated' } },
+        { atom: { op: 'exists', doc: '/orgs/{resource.orgId}/members/{actor.uid}' } },
+      ] },
+    }), vocab)!
+    expect(f.skipped).toEqual([])
+    expect(f.cases[0]!.seed).toEqual([
+      { path: '/projects/projectId-1', data: { orgId: 'value-1' } },
+      { path: '/orgs/value-1/members/user-1', data: {} },
+    ])
+    onlyMissing(f, 'read', '/orgs/value-1/members/user-1')
+    onlyMissing(f, 'update', '/orgs/value-1/members/user-1')
+  })
+
+  it('makes a value for an incoming placeholder and skips the ops that send no data', () => {
+    const f = generateTests(rule({
+      type: 'data-access',
+      target: { store: 'firestore', path: '/dogs/{dogId}' },
+      ops: ['list', 'update'],
+      requires: { atom: { op: 'exists', doc: '/orgs/{incoming.orgId}' } },
+    }), vocab)!
+    expect(f.skipped).toEqual(['list: the condition reads the incoming write, which list does not send'])
+    expect(f.cases[0]!.do.data).toEqual({ orgId: 'value-1' })
+    onlyMissing(f, 'update', '/orgs/value-1')
   })
 })

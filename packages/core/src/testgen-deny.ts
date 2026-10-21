@@ -65,7 +65,14 @@ export function denyWorld(atoms: Atom[], index: number, rule: DataAccessRule, al
     w.actor = null
     return w
   }
-  if (a.op === 'exists') return attempt(() => satisfy(atoms, rule, { skip: index }))
+  if (a.op === 'exists') {
+    // Keep the allowed world's record fields (its path may have made some up), so only the doc or row is missing.
+    const pins: Pin[] = [
+      ...Object.entries(allow.resource).map(([k, value]) => ({ operand: `resource.${k}`, value })),
+      ...Object.entries(allow.incoming).map(([k, value]) => ({ operand: `incoming.${k}`, value })),
+    ]
+    return attempt(() => satisfy(atoms, rule, { skip: index, pins }))
+  }
   const others = atoms.filter((_, j) => j !== index)
   for (const pin of pinsFor(a, others)) {
     const w = attempt(() => {

@@ -2,7 +2,7 @@ import { isLookupOperand, type Atom } from './expr.js'
 import { formatAtom } from './format.js'
 import { concretize } from './paths.js'
 import type { DataAccessRule } from './rules.js'
-import { addDoc, current, nextValue, read, resolveDoc, set, Unsupported, type World } from './testgen-world.js'
+import { addDoc, current, nextValue, read, resolveDocCreating, set, Unsupported, type World } from './testgen-world.js'
 
 // A pin fixes one operand to a value before the atoms are satisfied, so lookup and exists paths resolve against it.
 export type Pin = { operand: string; value: unknown }
@@ -10,7 +10,7 @@ export type Pin = { operand: string; value: unknown }
 export const usesLookup = (a: Atom): boolean =>
   a.op === 'isNull' ? isLookupOperand(a.operand) : a.op !== 'authenticated' && a.op !== 'exists' && (isLookupOperand(a.left) || isLookupOperand(a.right))
 
-// Plain atoms first, then lookups (they may create the stored-record fields their paths need), then `exists`.
+// Plain atoms first, then lookups, then `exists` (both may create the stored-record fields their paths need).
 const stage = (a: Atom) => (a.op === 'exists' ? 2 : usesLookup(a) ? 1 : 0)
 
 export function freshWorld(rule: DataAccessRule): World {
@@ -63,7 +63,7 @@ export function satisfy(atoms: Atom[], rule: DataAccessRule, opts: { skip?: numb
         }
         break
       }
-      case 'exists': addDoc(w, resolveDoc(w, a.doc)); break
+      case 'exists': addDoc(w, resolveDocCreating(w, a.doc)); break
       default: throw new Unsupported(`${a.op} conditions are not generated yet (${formatAtom(a)}); check them statically`)
     }
   }
