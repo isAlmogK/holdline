@@ -4,6 +4,9 @@ export type TokenKind = 'ident' | 'int' | 'float' | 'string' | 'punct' | 'eof'
 /** value: identifier text, number text, decoded string, or the punctuation itself. */
 export interface Token extends Pos { kind: TokenKind; value: string }
 
+/** How a token reads in an error message: `'x'` or `end of file`. */
+export const describeToken = (t: Token): string => (t.kind === 'eof' ? 'end of file' : `'${t.value}'`)
+
 const PUNCT2 = ['&&', '||', '==', '!=', '<=', '>=']
 const PUNCT1 = '(){}[],;:.?=!-+*/%<>'
 const ESCAPES: Record<string, string> = { '\\': '\\', "'": "'", '"': '"', n: '\n', t: '\t', r: '\r' }

@@ -83,4 +83,33 @@ describe('expression parser', () => {
     expect(src.slice(n.start, n.end)).toBe(src)
     if (n.type === 'binary') expect(src.slice(n.left.start, n.left.end)).toBe('(a || b)')
   })
+  it('ends a path at whitespace, ; ] and &&', () => {
+    const path = (...segs: string[]) => ({ type: 'path', segments: segs.map(value => [{ kind: 'text', value }]) })
+    expect(s('/a/b && c')).toMatchObject({ op: '&&', left: path('a', 'b'), right: { name: 'c' } })
+    expect(s('[/a/b]')).toMatchObject({ type: 'list', items: [path('a', 'b')] })
+    expect(s('x in [/a/b, /c]')).toMatchObject({ right: { items: [path('a', 'b'), path('c')] } })
+  })
+  it('reads $(…) with a nested call', () => {
+    expect(s('/a/$(f(x))/b')).toMatchObject({
+      type: 'path',
+      segments: [
+        [{ kind: 'text', value: 'a' }],
+        [{ kind: 'interp', expr: { type: 'call', callee: { name: 'f' }, args: [{ name: 'x' }] } }],
+        [{ kind: 'text', value: 'b' }],
+      ],
+    })
+  })
+  it('reads a ternary with paths in both branches', () => {
+    expect(s('c ? /a/b : /c')).toMatchObject({
+      type: 'ternary', test: { name: 'c' }, then: { type: 'path' }, else: { type: 'path', segments: [[{ kind: 'text', value: 'c' }]] },
+    })
+  })
+  it('reports a lone slash, an unterminated $( and an unterminated (', () => {
+    expect(() => p('/')).toThrow(expect.objectContaining({ line: 1, col: 1, message: "expected a path segment after '/'" }))
+    expect(() => p('/a/$(x')).toThrow(expect.objectContaining({ line: 1, col: 7, message: "expected ')', found end of file" }))
+    expect(() => p('/a/b(c')).toThrow(expect.objectContaining({ line: 1, col: 5, message: "unterminated '(' in path" }))
+  })
+  it('describes the trailing token like other errors', () => {
+    expect(() => p('a b')).toThrow(expect.objectContaining({ message: "expected end of file, found 'b'" }))
+  })
 })

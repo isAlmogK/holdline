@@ -1,14 +1,14 @@
-import { ParseError, type BinaryOp, type Node, type PathPart } from './ast.js'
-import { Lexer, type Token } from './lexer.js'
+import { ParseError, type BinaryOp, type Node } from './ast.js'
+import { Lexer, describeToken, type Token } from './lexer.js'
+import { readExprPath } from './parse-path.js'
 
 const REL_OPS = ['==', '!=', '<', '<=', '>', '>=']
-const SEGMENT_CHAR = /[A-Za-z0-9_\-.~%@+:]/
 
 /** Node payload without position; mk() adds line/col/start/end. */
 type Body = Node extends infer N ? (N extends unknown ? Omit<N, 'line' | 'col' | 'start' | 'end'> : never) : never
 
 export class ExprParser {
-  constructor(private readonly lexer: Lexer) {}
+  constructor(readonly lexer: Lexer) {}
 
   parseExpression(): Node {
     const test = this.parseOr()
@@ -86,7 +86,7 @@ export class ExprParser {
       if (this.isPunct(t, '.')) {
         this.lexer.next()
         const name = this.lexer.next()
-        if (name.kind !== 'ident') this.failAt(name, `expected an identifier, found ${this.describe(name)}`)
+        if (name.kind !== 'ident') this.failAt(name, `expected an identifier, found ${describeToken(name)}`)
         node = this.mk(node.start, name.end, { type: 'member', object: node, property: name.value })
       } else if (this.isPunct(t, '[')) {
         this.lexer.next()
@@ -131,9 +131,12 @@ export class ExprParser {
           return this.mk(t.start, close.end, { type: 'list', items })
         }
         if (t.value === '{') return this.parseMap()
-        if (t.value === '/') return this.readPath(t.start)
+        if (t.value === '/') {
+          const { segments, end } = readExprPath(this, t.start)
+          return this.mk(t.start, end, { type: 'path', segments })
+        }
     }
-    return this.failAt(t, `expected an expression, found ${this.describe(t)}`)
+    return this.failAt(t, `expected an expression, found ${describeToken(t)}`)
   }
 
   private parseMap(): Node {
@@ -141,7 +144,7 @@ export class ExprParser {
     const entries: { key: string; value: Node }[] = []
     while (!this.isPunct(this.lexer.peek(), '}')) {
       const key = this.lexer.next()
-      if (key.kind !== 'string') this.failAt(key, `expected a string key, found ${this.describe(key)}`)
+      if (key.kind !== 'string') this.failAt(key, `expected a string key, found ${describeToken(key)}`)
       this.expectPunct(':')
       entries.push({ key: key.value, value: this.parseExpression() })
       if (!this.isPunct(this.lexer.peek(), ',')) break
@@ -162,62 +165,11 @@ export class ExprParser {
     return { items, close: this.expectPunct(closer) }
   }
 
-  /** Reads a path literal straight from the source starting at the `/` at `start`. */
-  private readPath(start: number): Node {
-    const src = this.lexer.src
-    const segments: PathPart[][] = []
-    let i = start
-    while (src[i] === '/') {
-      const parsed = this.readSegment(i + 1)
-      if (!parsed) break
-      segments.push(parsed.parts)
-      i = parsed.end
-    }
-    if (segments.length === 0) {
-      const { line, col } = this.lexer.position(start)
-      throw new ParseError(line, col, "expected a path segment after '/'")
-    }
-    this.lexer.seek(i)
-    return this.mk(start, i, { type: 'path', segments })
-  }
-
-  private readSegment(from: number): { parts: PathPart[]; end: number } | undefined {
-    const src = this.lexer.src
-    const parts: PathPart[] = []
-    const addText = (value: string) => {
-      const last = parts[parts.length - 1]
-      if (last?.kind === 'text') last.value += value
-      else parts.push({ kind: 'text', value })
-    }
-    let i = from
-    for (;;) {
-      const c = src[i]
-      if (c === '$' && src[i + 1] === '(') {
-        this.lexer.seek(i + 2)
-        const expr = this.parseExpression()
-        parts.push({ kind: 'interp', expr })
-        i = this.expectPunct(')').end
-      } else if (c === '(') {
-        let depth = 0
-        let j = i
-        for (; j < src.length; j++) {
-          if (src[j] === '(') depth++
-          else if (src[j] === ')' && --depth === 0) break
-        }
-        if (j >= src.length) {
-          const { line, col } = this.lexer.position(i)
-          throw new ParseError(line, col, "unterminated '(' in path")
-        }
-        addText(src.slice(i, j + 1))
-        i = j + 1
-      } else if (c !== undefined && SEGMENT_CHAR.test(c)) {
-        let j = i + 1
-        while (j < src.length && SEGMENT_CHAR.test(src[j]!)) j++
-        addText(src.slice(i, j))
-        i = j
-      } else break
-    }
-    return parts.length === 0 ? undefined : { parts, end: i }
+  /** Used by path reading: parses the expression of a `$(` whose contents start at `from`. */
+  parseInterpolation(from: number): { expr: Node; end: number } {
+    this.lexer.seek(from)
+    const expr = this.parseExpression()
+    return { expr, end: this.expectPunct(')').end }
   }
 
   private binary(op: BinaryOp, left: Node, right: Node): Node {
@@ -234,12 +186,8 @@ export class ExprParser {
 
   private expectPunct(value: string): Token {
     const t = this.lexer.next()
-    if (!this.isPunct(t, value)) this.failAt(t, `expected '${value}', found ${this.describe(t)}`)
+    if (!this.isPunct(t, value)) this.failAt(t, `expected '${value}', found ${describeToken(t)}`)
     return t
-  }
-
-  private describe(t: Token): string {
-    return t.kind === 'eof' ? 'end of file' : `'${t.value}'`
   }
 
   private failAt(t: Token, message: string): never {
@@ -252,6 +200,6 @@ export function parseExpressionSource(src: string): Node {
   const lexer = new Lexer(src)
   const node = new ExprParser(lexer).parseExpression()
   const t = lexer.peek()
-  if (t.kind !== 'eof') throw new ParseError(t.line, t.col, `expected end of file, found '${t.value}'`)
+  if (t.kind !== 'eof') throw new ParseError(t.line, t.col, `expected end of file, found ${describeToken(t)}`)
   return node
 }
