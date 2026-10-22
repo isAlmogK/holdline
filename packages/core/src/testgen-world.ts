@@ -10,7 +10,7 @@ export type World = {
   incoming: Record<string, unknown>
   docs: SeedDoc[]
   counter: number
-  // The concretized Firestore/Storage path of the record under test. A lookup of this path writes to `resource`.
+  // The concretized Firestore path of the record under test (unset for Storage and Postgres). A lookup of this path writes to `resource`.
   targetPath?: string
   recordLookup: boolean
 }

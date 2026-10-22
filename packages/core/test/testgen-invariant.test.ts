@@ -1,0 +1,253 @@
+import { describe, expect, it } from 'vitest'
+import { parseFacts } from '../src/facts.js'
+import { hashRule } from '../src/hash.js'
+import { RuleSchema } from '../src/rules.js'
+import { generateTests } from '../src/testgen.js'
+
+const vocab = new Map()
+const rule = (raw: Record<string, unknown>) => RuleSchema.parse({ id: 'R-010', text: 't', status: 'approved', ...raw })
+const facts = parseFacts({
+  version: 1,
+  tables: [
+    { id: 'pg:public.orgs', name: 'public.orgs', columns: [
+      { name: 'id', type: 'uuid', nullable: false }, { name: 'name', type: 'text', nullable: false },
+    ], primaryKey: ['id'] },
+    { id: 'pg:public.projects', name: 'public.projects', columns: [
+      { name: 'id', type: 'uuid', nullable: false, default: 'gen_random_uuid()' },
+      { name: 'org_id', type: 'uuid', nullable: false },
+      { name: 'title', type: 'text', nullable: false },
+      { name: 'status', type: 'text', nullable: false },
+      { name: 'note', type: 'text', nullable: true },
+    ], primaryKey: ['id'],
+      foreignKeys: [{ columns: ['org_id'], references: { table: 'public.orgs', columns: ['id'] } }],
+      checks: [{ expr: "(status = ANY (ARRAY['active'::text, 'archived'::text]))" }] },
+    { id: 'pg:public.memberships', name: 'public.memberships', columns: [
+      { name: 'org_id', type: 'uuid', nullable: false }, { name: 'user_id', type: 'uuid', nullable: false },
+      { name: 'role', type: 'member_role', nullable: false },
+    ], primaryKey: ['org_id', 'user_id'], uniques: [['org_id', 'user_id']],
+      foreignKeys: [{ columns: ['org_id'], references: { table: 'public.orgs', columns: ['id'] } }],
+      enums: [{ column: 'role', values: ['owner', 'admin', 'member'] }] },
+  ],
+})
+const parents = [{ path: 'public.orgs', data: { id: 'org_id-1' } }]
+const validProject = { org_id: 'org_id-1', title: 'x', status: 'active' }
+
+describe('postgres invariant tests', () => {
+  it('not-null: a valid row inserts, a null is rejected', () => {
+    const r = rule({ type: 'invariant', target: { store: 'postgres', table: 'projects' }, kind: 'not-null', columns: ['org_id'] })
+    const f = generateTests(r, vocab, facts)!
+    expect(f.generatedFrom).toBe(hashRule(r, vocab))
+    expect(f.store).toBe('postgres')
+    expect(f.cases).toEqual([
+      { name: 'create: a complete valid row inserts', as: null, seed: parents,
+        do: { op: 'create', path: 'public.projects', data: validProject }, expect: 'allow' },
+      { name: 'create: rejects org_id null', as: null, seed: parents,
+        do: { op: 'create', path: 'public.projects', data: { ...validProject, org_id: null } }, expect: 'reject' },
+    ])
+    expect(f.skipped).toEqual([])
+  })
+  it('fk: a value with no referenced row is rejected', () => {
+    const r = rule({ type: 'invariant', target: { store: 'postgres', table: 'public.projects' }, kind: 'fk', columns: ['org_id'],
+      references: { table: 'orgs', columns: ['id'] } })
+    expect(generateTests(r, vocab, facts)!.cases[1]).toEqual({
+      name: 'create: rejects org_id with no matching public.orgs row', as: null, seed: parents,
+      do: { op: 'create', path: 'public.projects', data: { ...validProject, org_id: 'missing-1' } }, expect: 'reject' })
+  })
+  it('unique: a second row with the same values is rejected', () => {
+    const r = rule({ type: 'invariant', target: { store: 'postgres', table: 'memberships' }, kind: 'unique', columns: ['org_id', 'user_id'] })
+    const row = { org_id: 'org_id-1', user_id: 'filler', role: 'owner' }
+    expect(generateTests(r, vocab, facts)!.cases[1]).toEqual({
+      name: 'create: rejects a second row with the same org_id, user_id', as: null,
+      seed: [...parents, { path: 'public.memberships', data: row }],
+      do: { op: 'create', path: 'public.memberships', data: row }, expect: 'reject' })
+  })
+  it('enum: the rule values give the valid row, an unknown value is rejected', () => {
+    const r = rule({ type: 'invariant', target: { store: 'postgres', table: 'memberships' }, kind: 'enum', columns: ['role'],
+      values: ['member', 'owner', 'admin'] })
+    const cases = generateTests(r, vocab, facts)!.cases
+    // user_id is a primary-key column the rule does not name and not a foreign key: the runner gives it a key.
+    expect(cases[0]!.do.data).toEqual({ org_id: 'org_id-1', role: 'member' })
+    expect(cases[1]!.do.data!.role).toBe('__holdline_invalid__')
+    expect(cases[1]!.name).toBe("create: rejects role '__holdline_invalid__'")
+  })
+  it('check: skipped', () => {
+    const r = rule({ type: 'invariant', target: { store: 'postgres', table: 'projects' }, kind: 'check', columns: ['title'], expr: 'length(title) > 0' })
+    expect(generateTests(r, vocab, facts)).toMatchObject({ cases: [], skipped: ['check expressions are tested statically only'] })
+  })
+  it('skips without facts for the table', () => {
+    const r = rule({ type: 'invariant', target: { store: 'postgres', table: 'nope' }, kind: 'not-null', columns: ['a'] })
+    expect(generateTests(r, vocab, facts)!.skipped).toEqual(['table public.nope is not in the facts; run holdline scan, then holdline test --regenerate'])
+    expect(generateTests(r, vocab)!.skipped).toEqual(['table public.nope is not in the facts; run holdline scan, then holdline test --regenerate'])
+  })
+  it('skips storage invariants', () => {
+    const r = rule({ type: 'invariant', target: { store: 'storage', path: '/f/{id}' }, kind: 'not-null', columns: ['a'] })
+    expect(generateTests(r, vocab, facts)!.skipped).toEqual(['storage invariants are not generated; check them statically'])
+  })
+  it('still returns undefined for other non data-access rules', () => {
+    expect(generateTests(rule({ type: 'access', target: { routes: 'GET /x' }, requires: { atom: { op: 'authenticated' } } }), vocab, facts)).toBeUndefined()
+  })
+})
+
+describe('postgres invariant cases isolated from other keys', () => {
+  const keyed = parseFacts({
+    version: 1,
+    tables: [
+      { id: 'pg:public.users', name: 'public.users', columns: [{ name: 'id', type: 'uuid', nullable: false }], primaryKey: ['id'] },
+      { id: 'pg:public.orgs', name: 'public.orgs', columns: [{ name: 'id', type: 'uuid', nullable: false }], primaryKey: ['id'] },
+      { id: 'pg:public.tenants', name: 'public.tenants', columns: [{ name: 'id', type: 'uuid', nullable: false }], primaryKey: ['id'] },
+      // The Supabase profile shape: the primary key is also a foreign key.
+      { id: 'pg:public.profiles', name: 'public.profiles', columns: [
+        { name: 'id', type: 'uuid', nullable: false }, { name: 'username', type: 'text', nullable: false },
+      ], primaryKey: ['id'], foreignKeys: [{ columns: ['id'], references: { table: 'public.users', columns: ['id'] } }] },
+      { id: 'pg:public.slugs', name: 'public.slugs', columns: [
+        { name: 'id', type: 'uuid', nullable: false, default: 'gen_random_uuid()' },
+        { name: 'org_id', type: 'uuid', nullable: false },
+        { name: 'slug', type: 'text', nullable: false },
+        { name: 'kind', type: 'text', nullable: false },
+        { name: 'rank', type: 'integer', nullable: true, default: '0' },
+      ], primaryKey: ['id'], uniques: [['org_id', 'slug'], ['slug', 'kind'], ['slug', 'rank']],
+        foreignKeys: [{ columns: ['org_id'], references: { table: 'public.orgs', columns: ['id'] } }],
+        checks: [{ expr: "(kind = ANY (ARRAY['page'::text, 'post'::text]))" }] },
+      { id: 'pg:public.tags', name: 'public.tags', columns: [
+        { name: 'id', type: 'uuid', nullable: false, default: 'gen_random_uuid()' },
+        { name: 'slug', type: 'text', nullable: false },
+        { name: 'kind', type: 'text', nullable: false },
+      ], primaryKey: ['id'], uniques: [['slug', 'kind']], checks: [{ expr: "(kind IN ('page'))" }] },
+      { id: 'pg:public.docs', name: 'public.docs', columns: [
+        { name: 'id', type: 'uuid', nullable: false, default: 'gen_random_uuid()' },
+        { name: 'org_id', type: 'uuid', nullable: false },
+      ], primaryKey: ['id'], foreignKeys: [
+        { columns: ['org_id'], references: { table: 'public.orgs', columns: ['id'] } },
+        { columns: ['org_id'], references: { table: 'public.tenants', columns: ['id'] } },
+      ] },
+    ],
+  })
+  const unique = (table: string, columns: string[]) =>
+    generateTests(rule({ type: 'invariant', target: { store: 'postgres', table }, kind: 'unique', columns }), vocab, keyed)!
+
+  it('unique: a primary key that is a foreign key gets a second value and parent in the seeded duplicate', () => {
+    const f = unique('profiles', ['username'])
+    const row = { id: 'id-1', username: 'x' }
+    expect(f.cases).toEqual([
+      { name: 'create: a complete valid row inserts', as: null, seed: [{ path: 'public.users', data: { id: 'id-1' } }],
+        do: { op: 'create', path: 'public.profiles', data: row }, expect: 'allow' },
+      { name: 'create: rejects a second row with the same username', as: null,
+        seed: [{ path: 'public.users', data: { id: 'id-1' } }, { path: 'public.users', data: { id: 'id-2' } },
+          { path: 'public.profiles', data: { id: 'id-2', username: 'x' } }],
+        do: { op: 'create', path: 'public.profiles', data: row }, expect: 'reject' },
+    ])
+    expect(f.skipped).toEqual([])
+  })
+  it('unique: a rule on part of other unique keys varies their other columns, and sets columns with a default', () => {
+    const f = unique('slugs', ['slug'])
+    const row = { org_id: 'org_id-1', slug: 'x', kind: 'page', rank: 1 }
+    expect(f.cases[0]!.do.data).toEqual(row)
+    expect(f.cases[1]).toEqual({
+      name: 'create: rejects a second row with the same slug', as: null,
+      seed: [{ path: 'public.orgs', data: { id: 'org_id-1' } }, { path: 'public.orgs', data: { id: 'org_id-2' } },
+        { path: 'public.slugs', data: { org_id: 'org_id-2', slug: 'x', kind: 'post', rank: 2 } }],
+      do: { op: 'create', path: 'public.slugs', data: row }, expect: 'reject' })
+    expect(f.skipped).toEqual([])
+  })
+  it('unique: skips the reject case when another key cannot differ', () => {
+    const f = unique('tags', ['slug'])
+    expect(f.cases.map(c => c.expect)).toEqual(['allow'])
+    expect(f.skipped).toEqual(['create: cannot isolate unique slug (another unique key covers slug, kind)'])
+  })
+  it('unique: skips the reject case when another key is part of the rule columns', () => {
+    const f = unique('slugs', ['org_id', 'slug', 'kind'])
+    expect(f.cases.map(c => c.expect)).toEqual(['allow'])
+    expect(f.skipped).toEqual(['create: cannot isolate unique org_id, slug, kind (another unique key covers org_id, slug)'])
+  })
+  it('fk: skips the reject case when another foreign key covers a rule column', () => {
+    const r = rule({ type: 'invariant', target: { store: 'postgres', table: 'docs' }, kind: 'fk', columns: ['org_id'],
+      references: { table: 'orgs', columns: ['id'] } })
+    const f = generateTests(r, vocab, keyed)!
+    expect(f.cases.map(c => c.expect)).toEqual(['allow'])
+    expect(f.skipped).toEqual(['create: cannot isolate fk org_id (another foreign key covers org_id)'])
+  })
+})
+
+describe('firestore invariant tests', () => {
+  const condition = { and: [
+    { atom: { op: 'authenticated' } },
+    { atom: { op: 'in', left: 'incoming.orgId', right: 'doc(/users/{actor.uid}).orgIds' } },
+    { atom: { op: 'in', left: 'incoming.status', right: { literal: ['active', 'archived'] } } },
+  ] }
+  const fsFacts = parseFacts({ version: 1, policies: [
+    { id: 'firestore:/projects/{projectId}#create@5', store: 'firestore', target: '/projects/{projectId}', ops: ['create'], condition },
+  ] })
+  const users = { path: '/users/user-1', data: { orgIds: ['value-1'] } }
+
+  it('enum: allowed with a listed value, denied with another', () => {
+    const r = rule({ type: 'invariant', target: { store: 'firestore', path: '/projects/{id}' }, kind: 'enum', columns: ['status'], values: ['active', 'archived'] })
+    const f = generateTests(r, vocab, fsFacts)!
+    expect(f.cases).toEqual([
+      { name: 'create: allowed with a valid status', as: { uid: 'user-1', claims: {} }, seed: [users],
+        do: { op: 'create', path: '/projects/id-1', data: { orgId: 'value-1', status: 'active' } }, expect: 'allow' },
+      { name: "create: denied with status '__holdline_invalid__'", as: { uid: 'user-1', claims: {} }, seed: [users],
+        do: { op: 'create', path: '/projects/id-1', data: { orgId: 'value-1', status: '__holdline_invalid__' } }, expect: 'deny' },
+    ])
+  })
+  it('not-null: denied without the field', () => {
+    const r = rule({ type: 'invariant', target: { store: 'firestore', path: '/projects/{id}' }, kind: 'not-null', columns: ['orgId'] })
+    const f = generateTests(r, vocab, fsFacts)!
+    expect(f.cases.map(c => [c.name, c.do.data, c.expect])).toEqual([
+      ['create: allowed with orgId set', { orgId: 'value-1', status: 'active' }, 'allow'],
+      ['create: denied without orgId', { status: 'active' }, 'deny'],
+    ])
+  })
+  it('skips without a usable create policy', () => {
+    const r = rule({ type: 'invariant', target: { store: 'firestore', path: '/other/{id}' }, kind: 'not-null', columns: ['a'] })
+    expect(generateTests(r, vocab, fsFacts)!.skipped).toEqual(['create: no create policy for /other/{id} in the facts that cases can be generated for'])
+  })
+  const withSecond = (cond: unknown) => parseFacts({ version: 1, policies: [
+    { id: 'firestore:/projects/{projectId}#create@5', store: 'firestore', target: '/projects/{projectId}', ops: ['create'], condition },
+    { id: 'firestore:/projects/{projectId}#create@9', store: 'firestore', target: '/projects/{projectId}', ops: ['create'], condition: cond },
+  ] })
+  const nn = rule({ type: 'invariant', target: { store: 'firestore', path: '/projects/{id}' }, kind: 'not-null', columns: ['orgId'] })
+
+  it('skips the deny case when another create policy allows it', () => {
+    const f = generateTests(nn, vocab, withSecond({ and: [{ atom: { op: 'authenticated' } }] }))!
+    expect(f.cases.map(c => c.expect)).toEqual(['allow'])
+    expect(f.skipped).toEqual(['create: cannot deny only orgId (another create policy allows it: firestore:/projects/{projectId}#create@9)'])
+  })
+  it('skips the deny case when another create policy cannot be evaluated', () => {
+    const f = generateTests(nn, vocab, withSecond({ opaque: 'custom()' }))!
+    expect(f.cases.map(c => c.expect)).toEqual(['allow'])
+    expect(f.skipped).toEqual(['create: cannot deny only orgId (create policy firestore:/projects/{projectId}#create@9 cannot be evaluated)'])
+  })
+  it('renames the policy path params to the target\'s', () => {
+    const member = { and: [
+      { atom: { op: 'exists', doc: '/orgs/{param.projectId}/members/{actor.uid}' } },
+      { atom: { op: 'in', left: 'incoming.status', right: { literal: ['active', 'archived'] } } },
+    ] }
+    const f = generateTests(nn, vocab, parseFacts({ version: 1, policies: [
+      { id: 'firestore:/projects/{projectId}#create@5', store: 'firestore', target: '/projects/{projectId}', ops: ['create'], condition: member },
+    ] }))!
+    // The rule's target names the param `id`: the member document is seeded under the project being created.
+    expect(f.cases.map(c => [c.name, c.do.path, c.seed.map(s => s.path)])).toEqual([
+      ['create: allowed with orgId set', '/projects/id-1', ['/orgs/id-1/members/user-1']],
+      ['create: denied without orgId', '/projects/id-1', ['/orgs/id-1/members/user-1']],
+    ])
+  })
+  it('passes over a policy that reads a path param the target lacks', () => {
+    const r = rule({ type: 'invariant', target: { store: 'firestore', path: '/orgs/acme/projects/{id}' }, kind: 'not-null', columns: ['orgId'] })
+    const f = generateTests(r, vocab, parseFacts({ version: 1, policies: [
+      { id: 'firestore:/orgs/{orgId}/projects/{projectId}#create@5', store: 'firestore', target: '/orgs/{orgId}/projects/{projectId}', ops: ['create'],
+        condition: { atom: { op: 'exists', doc: '/orgs/{param.orgId}/members/{actor.uid}' } } },
+      { id: 'firestore:/orgs/{orgId}/projects/{projectId}#create@9', store: 'firestore', target: '/orgs/{orgId}/projects/{projectId}', ops: ['create'],
+        condition: { atom: { op: 'eq', left: 'actor.claim.admin', right: { literal: true } } } },
+    ] }))!
+    expect(f.cases.map(c => [c.name, c.as, c.seed])).toEqual([
+      ['create: allowed with orgId set', { uid: 'user-1', claims: { admin: true } }, []],
+      ['create: denied without orgId', { uid: 'user-1', claims: { admin: true } }, []],
+    ])
+    expect(f.skipped).toEqual([])
+  })
+  it('keeps the deny case when another create policy needs something the denied write lacks', () => {
+    const f = generateTests(nn, vocab, withSecond({ and: [{ atom: { op: 'eq', left: 'actor.claim.admin', right: { literal: true } } }] }))!
+    expect(f.cases.map(c => c.expect)).toEqual(['allow', 'deny'])
+    expect(f.skipped).toEqual([])
+  })
+})

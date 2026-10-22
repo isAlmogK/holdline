@@ -1,0 +1,48 @@
+import { describe, expect, it } from 'vitest'
+import { applyMigrations } from '@holdline/analyzer-postgres'
+import { project, SLOW } from './helpers.js'
+
+// The runner uses analyzer-postgres's applyMigrations; these pin what the runner relies on.
+describe('applyMigrations', () => {
+  it('applies supabase migrations in path order on top of the auth shim', async () => {
+    const root = await project({
+      'supabase/migrations/0002_b.sql': 'alter table public.t add column b text;',
+      'supabase/migrations/0001_a.sql': 'create table public.t (id uuid primary key default gen_random_uuid(), owner uuid default auth.uid());',
+    })
+    const r = await applyMigrations(root, {})
+    expect(r.failure).toBeUndefined()
+    expect(r.dialect).toBe('supabase')
+    expect(r.migrations.map(m => m.path)).toEqual(['supabase/migrations/0001_a.sql', 'supabase/migrations/0002_b.sql'])
+    const cols = await r.db.query<{ attname: string }>(`select attname from pg_attribute where attrelid = 'public.t'::regclass and attnum > 0 order by attnum`)
+    expect(cols.rows.map(c => c.attname)).toEqual(['id', 'owner', 'b'])
+    const roles = await r.db.query<{ rolname: string }>(`select rolname from pg_roles where rolname in ('anon','authenticated','service_role') order by 1`)
+    expect(roles.rows.map(x => x.rolname)).toEqual(['anon', 'authenticated', 'service_role'])
+    await r.db.close()
+  }, SLOW)
+  it('uses config globs and the plain dialect', async () => {
+    const root = await project({ 'db/schema/001.sql': 'create table things (id int primary key);' })
+    const r = await applyMigrations(root, { postgres: { migrations: ['db/schema/*.sql'], dialect: 'plain' } })
+    expect(r.dialect).toBe('plain')
+    expect(r.migrations.map(m => m.path)).toEqual(['db/schema/001.sql'])
+    await r.db.close()
+  }, SLOW)
+  it('stops at the first failing migration', async () => {
+    const root = await project({ 'migrations/1.sql': 'create table a (id int);', 'migrations/2.sql': 'create tabel b;', 'migrations/3.sql': 'create table c (id int);' })
+    const r = await applyMigrations(root, {})
+    expect(r.failure?.file).toBe('migrations/2.sql')
+    expect(r.failure?.message).toMatch(/syntax error/)
+    await r.db.close()
+  }, SLOW)
+  it('reads auth claims from request.jwt.claims', async () => {
+    const root = await project({ 'supabase/migrations/1.sql': 'create table t (id int);' })
+    const r = await applyMigrations(root, {})
+    const uid = '11111111-1111-4111-8111-111111111111'
+    expect((await r.db.query<{ u: string | null }>('select auth.uid() as u')).rows[0]!.u).toBeNull()
+    await r.db.transaction(async tx => {
+      await tx.query(`select set_config('request.jwt.claims', '{"sub":"${uid}","role":"authenticated","org":"x"}', true)`)
+      const row = (await tx.query<{ u: string; r: string; o: string }>(`select auth.uid() as u, auth.role() as r, auth.jwt() ->> 'org' as o`)).rows[0]!
+      expect(row).toEqual({ u: uid, r: 'authenticated', o: 'x' })
+    })
+    await r.db.close()
+  }, SLOW)
+})

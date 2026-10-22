@@ -1,5 +1,7 @@
+import type { Expr } from './expr.js'
 import type { DataOp, Facts, Guard, Location, Op, Policy, Route, Table } from './facts.js'
-import { normalizeTable, patternsOverlap, routeMatches } from './paths.js'
+import { renameParams } from './logic.js'
+import { alignParams, normalizeTable, patternsOverlap, routeMatches } from './paths.js'
 import type { DataTarget } from './rules.js'
 
 const POLICY_STORE = { postgres: 'pg-rls', firestore: 'firestore', storage: 'storage' } as const
@@ -55,6 +57,15 @@ export class FactIndex {
   policies(target: DataTarget, op: Op): Policy[] {
     return this.facts.policies.filter(p =>
       p.store === POLICY_STORE[target.store] && targetMatches(target, p.target) && p.ops.includes(op))
+  }
+
+  // The policies for `op` with each Firestore or Storage condition's path params renamed to the target's own.
+  // A policy param at a position where the target has no param gets a fresh name (`__p0`, ...).
+  alignedPolicies(target: DataTarget, op: Op): { policy: Policy; condition: Expr }[] {
+    return this.policies(target, op).map(policy => ({
+      policy,
+      condition: target.store === 'postgres' ? policy.condition : renameParams(policy.condition, alignParams(policy.target, target.path), { fresh: true }),
+    }))
   }
 
   table(name: string): Table | undefined {

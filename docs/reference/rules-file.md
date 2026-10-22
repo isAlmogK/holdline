@@ -66,7 +66,7 @@ empty rules file.
 
 `effectiveEnforce(rule)` returns `enforce ?? default`. `enforce` is metadata for the commands around core:
 `runChecks` runs the static check for every approved rule regardless of it, and `generateTests` produces test
-cases only for `data-access` rules.
+cases only for `data-access` and `invariant` rules. `holdline test` runs the rules whose `enforce` includes `test`.
 
 ## Rule types and their static checks
 
@@ -227,7 +227,7 @@ the results. `--rule` limits the run to those rule ids; an id that is not in `ho
 | 0 | `check`: no violation and no unapproved edit (stale and unknown results allowed without `--strict`) |
 | 1 | `check`: a violation or an unapproved edit; with `--strict`, also a stale or unknown result |
 | 2 | Any command: usage or config error. Bad arguments, an unknown `--rule` id, a malformed `holdline.rules`, facts file or `.holdline/pending.yaml` (`PendingFileError`, for both YAML and schema errors), a missing facts file, or a missing proposals file (`proposals file not found: <path>`) |
-| 3 | Any command: internal error. `check` also exits 3 when the facts hold an error diagnostic with `file: ''` (an analyzer crashed): it still prints every result first, then exits 3 whatever the results were |
+| 3 | Any command: internal error. `check` also exits 3 when the facts hold an error diagnostic with `file: ''` (an analyzer crashed): it still prints every result first, then exits 3 whatever the results were. `test` exits 3 when a database runner cannot start ([test runner reference](test-runner.md#exit-codes)) |
 
 ## Vocabulary and recognizers
 
@@ -353,8 +353,10 @@ along with newly accepted vocabulary. Not added, and reported as `conflicts`:
 
 ## Test cases (`.holdline/tests/<rule id>.yaml`)
 
-Tests are data. `generateTests(rule, vocab)` is deterministic: the same rule and vocabulary always give the same
-file. It returns `undefined` for every rule type except `data-access`. `holdline approve` writes the file.
+Tests are data. `generateTests(rule, vocab, facts?)` is deterministic: the same rule, vocabulary and facts always give
+the same file. It returns `undefined` for every rule type except `data-access` and `invariant`. `holdline approve`
+writes the file (with the facts of the last scan, `.holdline/cache/facts.json`, when there is a readable one), and
+`holdline test` writes a missing or outdated one before running it. Running the cases: [test runner reference](test-runner.md).
 
 ```yaml
 rule: R-020
@@ -386,7 +388,7 @@ skipped: []                              # why cases were not generated
 | `cases[].as` | `{ uid, role?, claims }` or `null` for an anonymous caller |
 | `cases[].seed` | Records to exist first: `{ path, store?, data }`. Postgres paths are `schema.table` and `data` is the row. `store` (`postgres`, `firestore` or `storage`) is set only in `storage` files: `storage` on the object under test, `firestore` on every other seed (the `exists` and lookup documents Storage rules read through `firestore.get`/`firestore.exists`). Firestore and Postgres files leave it unset |
 | `cases[].do` | `{ op, path, data? }`. `data` is present for `create` and `update` |
-| `cases[].expect` | `allow`, `deny`, or `reject`. `reject` means a write the database must refuse (for `invariant` cases, such as inserting a null into a `not-null` column). `generateTests` does not produce `reject` cases yet; that lands in Phase 1 |
+| `cases[].expect` | `allow`, `deny`, or `reject`. `reject` means a write the database must refuse (for `invariant` cases, such as inserting a null into a `not-null` column). Only Postgres invariant cases use it |
 | `skipped` | Human readable reasons |
 
 ### Generation
@@ -416,7 +418,27 @@ How each atom is satisfied and then broken:
 | `eq a b` | Copies the fixed side (`actor.uid`, `param.*`, literal) to the other; else copies the side that is already set; else invents `value-n` for both. A `doc(P).f` side seeds field `f` of the document at `P` | Pins the `resource.*` or `incoming.*` side to `'other-value'`; else the looked-up field `f`; else a claim or role side; else changes the actor uid to `user-2` |
 | `exists doc` | Adds the document to the seed, filling placeholders from the world (an unset `resource.*` or `incoming.*` placeholder gets a fresh `value-n`). Postgres `pg:<table>?<col>={<operand>}...` becomes a row | Satisfies the other atoms without it, with the allowed case's `resource.*` and `incoming.*` values pinned, so the case differs only by the missing document or row |
 
-Atoms are satisfied in three stages: plain atoms, then atoms with a lookup operand, then `exists` atoms, so the placeholders they refer to already have values. Generation reads the values earlier conditions already set: an operand that is already set keeps its value (`in`/`eq` read it before inventing one). Within a stage atoms are taken in order, so a few orderings still end in a visible skip (`cannot satisfy ...`, `conflicting conditions ...`), never in a wrong case. A `resource.*` or `incoming.*` field that only a lookup or `exists` path needs (`doc(/accounts/{resource.accountId}/members/{actor.uid}).role`, `exists(/orgs/{resource.orgId}/members/{actor.uid})`) gets a fresh `value-n`. A seeded Firestore document is unique per path: an `exists` doc and lookups on the same path merge into one seed entry with the fields combined (conflicting values are skipped as `conflicting conditions`). A lookup of the target document itself (`doc(/dogs/{param.dogId}).ownerId` on `/dogs/{dogId}`) writes to the record, so it reads the stored record like a `resource.*` operand. An `exists` of the target document (`exists(/dogs/{param.dogId})`) merges into the record seed the same way, so every path appears at most once in a case's `seed`; the record exists for every op but `create`, so that atom is never true on create (create is skipped) and cannot be denied alone on other ops.
+Atoms are satisfied in three stages: plain atoms, then atoms with a lookup operand, then `exists` atoms, so the placeholders they refer to already have values. Generation reads the values earlier conditions already set: an operand that is already set keeps its value (`in`/`eq` read it before inventing one). Within a stage atoms are taken in order, so a few orderings still end in a visible skip (`cannot satisfy ...`, `conflicting conditions ...`), never in a wrong case. A `resource.*` or `incoming.*` field that only a lookup or `exists` path needs (`doc(/accounts/{resource.accountId}/members/{actor.uid}).role`, `exists(/orgs/{resource.orgId}/members/{actor.uid})`) gets a fresh `value-n`. A seeded Firestore document is unique per path: an `exists` doc and lookups on the same path merge into one seed entry with the fields combined (conflicting values are skipped as `conflicting conditions`). A lookup of the target document itself (`doc(/dogs/{param.dogId}).ownerId` on `/dogs/{dogId}`) writes to the record, so it reads the stored record like a `resource.*` operand. An `exists` of the target document (`exists(/dogs/{param.dogId})`) merges into the record seed the same way, so every path appears at most once in a case's `seed`; the record exists for every op but `create`, so that atom is never true on create (create is skipped) and cannot be denied alone on other ops. Both merges apply to Firestore targets only: Storage rules read Firestore, never the object, so in a `storage` file an `exists` or lookup on the object's own path is a separate `store: firestore` seed and the object's custom metadata is not touched.
+
+With facts (`generateTests(rule, vocab, facts)`), each op's allowed world also satisfies the store's real policy for
+that op, which can need more than the rule names (a create rule that also checks `status`, a select policy with
+`deleted_at is null`). The candidates are the target's policies for the op, in facts order, with Firestore and Storage
+path params renamed to the rule target's (as the static check does). The first candidate that meets all of these adds
+its other atoms to that op's atoms:
+
+- it is only an `and` of atoms after expanding the vocabulary;
+- it reads no path param the target lacks;
+- one world can satisfy it together with the rule;
+- it adds no per-op skip that the rule's atoms alone would not cause.
+
+An atom equivalent to a rule atom (`a == b` and `b == a`) is the rule atom, not an extra one. When no candidate meets
+all four but one meets the first three and adds a per-op skip (a select policy that reads the row, on `list`), the op
+is skipped with that reason: the store would refuse an allow case built from the rule's atoms alone. With no such
+policy, or no facts, the op uses the rule's atoms alone. Deny cases are
+still one per rule atom, with the same names; the policy's extra atoms hold in every deny world (except, as for
+every atom, those that read the actor when `authenticated` is broken). The per-op skips
+below look at the extra atoms too. `generatedFrom` hashes only the rule and vocabulary, so a test file reflects the
+facts it was generated with.
 
 A `deny` world is not the allowed world edited: it is solved again around the pin that falsifies the atom (pins on plain operands are applied first, pins on lookup operands with the lookup atoms), so documents and paths keyed on a pinned value follow it. The generator then evaluates every atom in the world and keeps it only if the broken atom is false and every other atom holds. Candidate pins are tried in order, first those no other atom reads or builds a path from. Breaking `authenticated` sets `as: null`, which also makes every atom that reads the actor false; that is not checked.
 
@@ -444,6 +466,45 @@ Per op, only that op is skipped (the others are still generated) and the reason 
 | A deny case that would have to break more than one atom (every pin makes another atom false), for example `exists(P)` together with a lookup on `P`: the case for that atom only | `<op>: cannot deny only <atom> (other conditions depend on the same values)` |
 | `read`, `list` or `delete` and an atom reads `incoming.*` (directly, or in an `exists` doc or lookup path). Only `create` and `update` send data, so the allow and deny cases would differ only in `expect` | `<op>: the condition reads the incoming write, which <op> does not send` |
 | `list` and the satisfied record has fields | `list: needs query filters to test; read cases cover the condition` |
+
+### Invariant cases
+
+`invariant` rules generate `create` cases from the facts. Without the facts they need, the file has no cases and one
+skip reason.
+
+Postgres (`as: null`; the runner inserts as superuser with foreign keys on):
+
+| Detail | Value |
+|---|---|
+| Valid row | The columns the rule names plus every `NOT NULL` column without a default; for `unique`, also every column of the other keys (below). Primary-key columns are left to the runner unless the rule names them or they are in a foreign key: the runner gives each row its own key. Foreign-key columns get `<column>-1`, a named `enum` column the rule's first value, any other column the shared filler (`fillerValue`, see the [test runner reference](test-runner.md#values-and-filler)) |
+| Parents | Each foreign key whose columns are all in the row gets a seed row in the referenced table with the referenced columns set to the row's values |
+| Other keys (`unique`) | The primary key and every unique set in the facts (`uniques`) other than the rule's own column set. The seeded duplicate keeps the rule's columns and differs in every other column of these keys: a foreign-key column gets `<column>-2` (and its own parent row), a primary-key column the runner keys is left out, any other column a second filler (`otherFillerValue`: uuid `filler-2`, text `x2`, numbers `2`, boolean `true`, the second enum label or CHECK literal) |
+| Allow case | `create: a complete valid row inserts` |
+| `not-null` | Per column: `create: rejects <column> null`, the valid row with the column `null` |
+| `fk` | `create: rejects <columns> with no matching <table> row`, the columns set to `missing-1`, `missing-2`, ... Skipped when another foreign key in the facts covers one of the columns (it would refuse the row without the rule's): `create: cannot isolate fk <columns> (another foreign key covers <columns2>)` |
+| `unique` | `create: rejects a second row with the same <columns>`: the duplicate (Other keys) is seeded, then the valid row is inserted, so only a constraint on the rule's columns can refuse it. Skipped when another key cannot differ (all its other columns have one possible value, such as a single enum label or CHECK literal, or it lies within the rule's columns): `create: cannot isolate unique <columns> (another unique key covers <columns2>)` |
+| `enum` | Per column: `create: rejects <column> '__holdline_invalid__'` |
+| `check` | Skipped: `check expressions are tested statically only` |
+| Table not in the facts | Skipped: `table <table> is not in the facts; run holdline scan, then holdline test --regenerate` |
+
+Every case but the allow case has `expect: reject`.
+
+Firestore (`not-null` and `enum` only): the target's `create` policies in the facts are tried in order, with their path
+params renamed to the target's (`FactIndex.alignedPolicies`). The first whose condition is only an `and` of atoms, reads
+no path param the target lacks and can be satisfied, with each `enum` column set to the rule's first value
+and each `not-null` column set (`present-1` when the policy does not set it), gives the allowed world:
+
+| Case | Name |
+|---|---|
+| allow | `create: allowed with a valid <columns>` (`enum`) or `create: allowed with <columns> set` (`not-null`) |
+| deny, per column | `create: denied with <column> '__holdline_invalid__'` (`enum`) or `create: denied without <column>` (`not-null`, the field removed) |
+
+Firestore allows a write when any create rule allows it, so a deny case is skipped when another create policy allows
+the denied write (`create: cannot deny only <column> (another create policy allows it: <policy id>)`) or cannot be
+evaluated (`... (create policy <policy id> cannot be evaluated)`). With no usable policy, no facts, or another kind,
+the reason is `create: no create policy for <path> in the facts that cases can be generated for`.
+
+Storage invariants are not generated (`storage invariants are not generated; check them statically`).
 
 Parse and write with `parseTestFile` / `serializeTestFile`.
 

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "policies": [
+    {
+      "id": "firestore:firestore.rules#/projects/{projectId}:create",
+      "store": "firestore",
+      "target": "/projects/{projectId}",
+      "ops": ["create"],
+      "condition": {
+        "and": [
+          { "atom": { "op": "authenticated" } },
+          { "atom": { "op": "in", "left": "incoming.orgId", "right": "doc(/users/{actor.uid}).orgIds" } },
+          { "atom": { "op": "in", "left": "incoming.status", "right": { "literal": ["active", "archived"] } } }
+        ]
+      },
+      "evidence": { "file": "firestore.rules", "line": 7 }
+    }
+  ]
+}

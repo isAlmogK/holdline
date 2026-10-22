@@ -1,47 +1,55 @@
-import { deepEqual } from './canonical.js'
-import { isLookupOperand, type Atom } from './expr.js'
+import { canonicalJson, deepEqual } from './canonical.js'
+import type { Atom } from './expr.js'
 import { formatAtom } from './format.js'
 import { hashRule } from './hash.js'
-import { expand, flattenAnd, type Vocabulary } from './logic.js'
-import { concretize } from './paths.js'
-import type { DataAccessRule, Rule } from './rules.js'
+import { andAtoms, expand, type Vocabulary } from './logic.js'
+import type { DataAccessRule, InvariantRule, Rule } from './rules.js'
 import type { TestCase, TestFile } from './testcase.js'
-import type { Op } from './facts.js'
+import type { Facts } from './facts.js'
+import { toCase } from './testgen-case.js'
 import { denyWorld } from './testgen-deny.js'
 import { holds } from './testgen-eval.js'
+import { postgresInvariantCases } from './testgen-invariant.js'
+import { firestoreInvariantCases } from './testgen-invariant-doc.js'
+import { policyAtoms } from './testgen-policy.js'
 import { satisfy } from './testgen-satisfy.js'
+import { opSkip } from './testgen-skip.js'
 import { Unsupported, type World } from './testgen-world.js'
 
-export function generateTests(rule: Rule, vocab: Vocabulary): TestFile | undefined {
+type Solved = { satisfied: World; denies: (World | undefined)[] }
+
+export function generateTests(rule: Rule, vocab: Vocabulary, facts?: Facts): TestFile | undefined {
+  if (rule.type === 'invariant') return invariantTests(rule, vocab, facts)
   if (rule.type !== 'data-access') return undefined
   const base = { rule: rule.id, generatedFrom: hashRule(rule, vocab), store: rule.target.store, cases: [] as TestCase[], skipped: [] as string[] }
-  const parts = flattenAnd(expand(rule.requires, vocab))
-  if (!parts.every((p): p is { atom: Atom } => 'atom' in p)) {
+  const parts = andAtoms(expand(rule.requires, vocab))
+  if (!parts) {
     return { ...base, skipped: ['the requirement must be only "and" of atoms to generate cases; check it statically'] }
   }
-  const atoms = parts.map(p => p.atom).filter((a, i, all) => all.findIndex(b => deepEqual(a, b)) === i)
+  const ruleAtoms = parts.filter((a, i, all) => all.findIndex(b => deepEqual(a, b)) === i)
+  // Ops whose policies add the same atoms share one solution.
+  const solutions = new Map<string, Solved>()
+  const solve = (atoms: Atom[]): Solved => {
+    const key = canonicalJson(atoms)
+    const known = solutions.get(key)
+    if (known) return known
+    const solved = solveAtoms(atoms, ruleAtoms.length, rule)
+    solutions.set(key, solved)
+    return solved
+  }
   try {
-    const satisfied = satisfy(atoms, rule)
-    const unmet = atoms.find(a => !holds(satisfied, a))
-    if (unmet) throw new Unsupported(`cannot satisfy ${formatAtom(unmet)} together with the other conditions`)
-    const readsRecord = satisfied.recordLookup || atoms.some(readsStoredRecord)
-    const denies = atoms.map((_, i) => denyWorld(atoms, i, rule, satisfied))
-    const readsWrite = atoms.some(readsIncoming)
+    // A rule the generator cannot satisfy on its own skips the whole file, with or without facts.
+    solve(ruleAtoms)
     for (const op of rule.ops) {
-      if (readsWrite && (op === 'read' || op === 'list' || op === 'delete')) {
-        base.skipped.push(`${op}: the condition reads the incoming write, which ${op} does not send`)
-        continue
-      }
-      if (op === 'list' && Object.keys(satisfied.resource).length > 0) {
-        base.skipped.push('list: needs query filters to test; read cases cover the condition')
-        continue
-      }
-      if (op === 'create' && readsRecord) {
-        base.skipped.push('create: the condition reads the stored record, which does not exist on create')
+      const atoms = facts ? [...ruleAtoms, ...policyAtoms(rule, op, ruleAtoms, vocab, facts)] : ruleAtoms
+      const { satisfied, denies } = solve(atoms)
+      const skip = opSkip(op, atoms, satisfied)
+      if (skip) {
+        base.skipped.push(skip)
         continue
       }
       base.cases.push(toCase(`${op}: allowed when every condition holds`, satisfied, satisfied, rule, op, 'allow'))
-      atoms.forEach((a, i) => {
+      ruleAtoms.forEach((a, i) => {
         const denied = denies[i]
         if (denied) base.cases.push(toCase(`${op}: denied without ${formatAtom(a)}`, denied, satisfied, rule, op, 'deny'))
         else base.skipped.push(`${op}: cannot deny only ${formatAtom(a)} (other conditions depend on the same values)`)
@@ -54,43 +62,19 @@ export function generateTests(rule: Rule, vocab: Vocabulary): TestFile | undefin
   return base
 }
 
-function targetPath(rule: DataAccessRule): string {
-  return rule.target.store === 'postgres' ? rule.target.table : rule.target.path
+// The allowed world for `atoms`, and a deny world for each of the first `denyCount` atoms (the rule's own):
+// every other atom, a policy's extra atoms included, still holds in it.
+function solveAtoms(atoms: Atom[], denyCount: number, rule: DataAccessRule): Solved {
+  const satisfied = satisfy(atoms, rule)
+  const unmet = atoms.find(a => !holds(satisfied, a))
+  if (unmet) throw new Unsupported(`cannot satisfy ${formatAtom(unmet)} together with the other conditions`)
+  const denies = atoms.slice(0, denyCount).map((_, i) => denyWorld(atoms, i, rule, satisfied))
+  return { satisfied, denies }
 }
 
-function toCase(name: string, w: World, dataWorld: World, rule: DataAccessRule, op: Op, expect: 'allow' | 'deny'): TestCase {
-  const path = rule.target.store === 'postgres' ? storePath(rule) : concretize(targetPath(rule), p => w.params[p] ?? `${p}-1`)
-  const record = structuredClone(w.resource)
-  const seed = structuredClone([...(op === 'create' ? [] : [{ path: storePath(rule), data: record }]), ...w.docs])
-  const data = op === 'create' || op === 'update' ? structuredClone({ ...dataWorld.resource, ...w.incoming }) : undefined
-  const listPath = path.split('/').slice(0, -1).join('/')
-  return {
-    name,
-    as: w.actor ? { ...w.actor, claims: { ...w.actor.claims } } : null,
-    seed: rule.target.store === 'postgres' ? seed : seed.map(s => {
-      const own = s.path === storePath(rule)
-      const store = rule.target.store === 'storage' ? { store: own ? 'storage' as const : 'firestore' as const } : {}
-      return { path: own ? path : s.path, ...store, data: s.data }
-    }),
-    do: { op, path: op === 'list' && rule.target.store !== 'postgres' ? listPath : path, ...(data ? { data } : {}) },
-    expect,
-  }
+function invariantTests(rule: InvariantRule, vocab: Vocabulary, facts: Facts | undefined): TestFile {
+  const base = { rule: rule.id, generatedFrom: hashRule(rule, vocab), store: rule.target.store }
+  if (rule.target.store === 'storage') return { ...base, cases: [], skipped: ['storage invariants are not generated; check them statically'] }
+  if (rule.target.store === 'postgres') return { ...base, ...postgresInvariantCases(rule as InvariantRule & { target: { store: 'postgres' } }, facts) }
+  return { ...base, ...firestoreInvariantCases(rule, facts) }
 }
-
-function storePath(rule: DataAccessRule): string {
-  return rule.target.store === 'postgres' ? rule.target.table.includes('.') ? rule.target.table : `public.${rule.target.table}` : targetPath(rule)
-}
-
-// True when an atom reads `<root>.*` directly or in a lookup or `exists` path placeholder.
-function reads(a: Atom, root: 'resource' | 'incoming'): boolean {
-  const mentions = (o: unknown) =>
-    typeof o === 'string' && (o.startsWith(`${root}.`) || (isLookupOperand(o) && o.includes(`{${root}.`)))
-  if (a.op === 'exists') return a.doc.includes(`{${root}.`)
-  if (a.op === 'authenticated') return false
-  if (a.op === 'isNull') return mentions(a.operand)
-  return Object.values(a).some(mentions)
-}
-
-const readsStoredRecord = (a: Atom) => reads(a, 'resource')
-// Only create and update send data, so a condition on it cannot be tested on read, list or delete.
-const readsIncoming = (a: Atom) => reads(a, 'incoming')

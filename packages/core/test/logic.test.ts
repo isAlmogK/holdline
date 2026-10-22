@@ -295,6 +295,7 @@ describe('prover soundness (model based)', () => {
     fc.tuple(expr, expr, expr).map(([x, y, z]): [Expr, Expr] => [{ or: [{ and: [x, y] }, { and: [z, x] }] }, { or: [x, y] }]),
   )
 
+  // About 3s alone; the full parallel `pnpm test` (emulator and PGlite suites) can push it past the 5s default.
   it('never proves a requirement that some world violates', () => {
     let proved = 0
     fc.assert(fc.property(pair, ([c, r]) => {
@@ -303,7 +304,7 @@ describe('prover soundness (model based)', () => {
       return sound(c, r)
     }), { numRuns: 300 })
     expect(proved).toBeGreaterThan(50)
-  })
+  }, 30_000)
 })
 
 describe('lookup operands in implication', () => {

@@ -63,6 +63,9 @@ importers:
       '@holdline/core':
         specifier: workspace:*
         version: link:../core
+      '@holdline/testkit':
+        specifier: workspace:*
+        version: link:../testkit
       commander:
         specifier: ^15.0.0
         version: 15.0.0
@@ -79,6 +82,30 @@ importers:
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+
+  packages/testkit:
+    dependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.5.11
+        version: 0.5.11
+      '@firebase/rules-unit-testing':
+        specifier: ^6.0.0
+        version: 6.0.0(firebase@13.1.0)
+      '@holdline/analyzer-postgres':
+        specifier: workspace:*
+        version: link:../analyzer-postgres
+      '@holdline/core':
+        specifier: workspace:*
+        version: link:../core
+      firebase:
+        specifier: ^13.1.0
+        version: 13.1.0
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
       zod:
         specifier: ^4.6.7
         version: 4.6.7

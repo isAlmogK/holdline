@@ -172,3 +172,9 @@ export function mentionsOperand(expr: Expr, operand: string): boolean {
 export function flattenAnd(expr: Expr): Expr[] {
   return 'and' in expr ? expr.and.flatMap(flattenAnd) : [expr]
 }
+
+// The atoms of an "and" of atoms (one atom counts), or `undefined` when the expression has anything else.
+export function andAtoms(expr: Expr): Atom[] | undefined {
+  const parts = flattenAnd(expr)
+  return parts.every((p): p is { atom: Atom } => 'atom' in p) ? parts.map(p => p.atom) : undefined
+}

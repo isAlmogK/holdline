@@ -28,7 +28,7 @@ These are the interface between parallel tracks. Changing one means updating the
 | Analyzer contract | `packages/core/src/analyzer.ts` |
 
 Reference docs (keep true when a contract changes): [docs/reference/facts.md](docs/reference/facts.md),
-[docs/reference/rules-file.md](docs/reference/rules-file.md).
+[docs/reference/rules-file.md](docs/reference/rules-file.md), [docs/reference/test-runner.md](docs/reference/test-runner.md).
 
 ## Layout
 
@@ -37,6 +37,7 @@ Reference docs (keep true when a contract changes): [docs/reference/facts.md](do
 | `packages/core` | Contracts, predicate logic, checkers, test generator, proposals, prompt, scan |
 | `packages/cli` | The `holdline` command, a thin layer over core |
 | `packages/analyzer-*` | One per stack (Phase 1 and 2), each emits the fact graph |
+| `packages/testkit` | Runs the generated database test cases on PGlite and the Firebase emulator (`holdline test`) |
 | `examples/golden-*` | Small apps with known rules and one breakage per rule |
 
 ## Adding an analyzer
@@ -56,6 +57,8 @@ Phase 1 apps use `breakages/*.patch` unified diffs against the app, run end to e
 - `pnpm test`: all tests
 - `pnpm typecheck`: TypeScript
 - `pnpm holdline <command>`: run the CLI from source
+- `pnpm holdline test`: run the generated database test cases (Firestore and Storage cases, and the `@emulator`
+  test suites, need firebase-tools and Java 21+; without them they report or skip why)
 
 ## How to work
 
