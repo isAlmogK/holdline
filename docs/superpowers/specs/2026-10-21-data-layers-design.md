@@ -1,6 +1,6 @@
 # Holdline Phase 1: Data Layers
 
-**Status:** Implemented (2026-10-22). Step 0 and Tracks A, B and C are built; see [As built (step 0)](#as-built-step-0), [As built (Track A)](#as-built-track-a), [As built (Track B)](#as-built-track-b) and [As built (Track C)](#as-built-track-c).
+**Status:** Implemented (2026-10-22). Step 0 and Tracks A, B and C are built and the DogBase gate passes; see [As built (step 0)](#as-built-step-0), [As built (Track A)](#as-built-track-a), [As built (Track B)](#as-built-track-b), [As built (Track C)](#as-built-track-c) and [As built (DogBase gate)](#as-built-dogbase-gate).
 
 **Feature:** [Holdline feature and core design](2026-10-21-holdline-design.md) in this repo. This spec covers Phase 1 (spec 2 in the feature spec's table): the Postgres and Firestore/Storage analyzers and the database test runner.
 
@@ -514,3 +514,22 @@ Known limits left by Track C:
   column is checked by the old key.
 - Postgres access cases run in `session_replication_role = replica` through the operation, so triggers are off and a
   trigger that would refuse a write is bypassed.
+
+## As built (DogBase gate)
+
+Section 7 was run again on 2026-10-22 on `main` at `a6bbb7e`, after Tracks A, B and C merged. `holdline scan` read
+three rules files (one Firestore, two Storage) with 130 policies and reported zero diagnostics, error or warning, so
+section 1 item 3 holds. It was run on a copy of the private checkout's tracked files, so the facts cache was not
+written into that checkout; nothing from it is committed here.
+
+The scan summary showed 24 opaque sub-conditions. Each falls under a pattern already listed in
+[As built (Track B)](#as-built-track-b), so none was normalized:
+
+- Lookups whose path is keyed by a field of another looked-up document, including the actor's membership in a list
+  field of such a document (`request.auth.uid in get(/a/$(other.data.x)).data.members`). These guard the main
+  access paths, so the nested-lookup placeholder remains the most useful normalization (a core contract change).
+- `hasAny` over lists, on stored fields and on another document's list.
+- Map-shape checks on writes: `keys().hasOnly([...])`, key presence (`'f' in data`), `is` type checks and `size()`.
+- Chained `.get('a', {}).get('b', d)` on a looked-up document, with a default that satisfies the comparison.
+- Helper functions that return a computed string, used in comparisons and in `in`.
+- Storage: `resource == null` and `request.resource.size` limits.
