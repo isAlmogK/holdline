@@ -431,8 +431,10 @@ its other atoms to that op's atoms:
 - one world can satisfy it together with the rule;
 - it adds no per-op skip that the rule's atoms alone would not cause.
 
-An atom equivalent to a rule atom (`a == b` and `b == a`) is the rule atom, not an extra one. With no such policy, or
-no facts, the op uses the rule's atoms alone. Deny cases are
+An atom equivalent to a rule atom (`a == b` and `b == a`) is the rule atom, not an extra one. When no candidate meets
+all four but one meets the first three and adds a per-op skip (a select policy that reads the row, on `list`), the op
+is skipped with that reason: the store would refuse an allow case built from the rule's atoms alone. With no such
+policy, or no facts, the op uses the rule's atoms alone. Deny cases are
 still one per rule atom, with the same names; the policy's extra atoms hold in every deny world (except, as for
 every atom, those that read the actor when `authenticated` is broken). The per-op skips
 below look at the extra atoms too. `generatedFrom` hashes only the rule and vocabulary, so a test file reflects the

@@ -99,11 +99,13 @@ describe('generateTests satisfies the op policy from the facts', () => {
     ))).toEqual(f)
   })
 
-  it('passes over a candidate whose extras would skip an op the rule alone can test', () => {
-    // A read policy that reads the incoming write cannot be tested on read, so the op uses the rule atoms alone.
+  it('skips an op whose only usable policy cannot be tested on it, instead of an allow case the store refuses', () => {
+    // A read policy that reads the incoming write is never true on read: the rule atoms alone would expect allow.
     const owner: Atom = { op: 'eq', left: 'resource.ownerId', right: 'actor.uid' }
     const r = rule({ type: 'data-access', target: { store: 'firestore', path: projects }, ops: ['read'], requires: and(authenticated, owner) })
-    expect(generateTests(r, vocab, fsFacts(fsPolicy(1, and(authenticated, owner, statusIn(['a'])), ['read'])))).toEqual(generateTests(r, vocab))
+    const f = generateTests(r, vocab, fsFacts(fsPolicy(1, and(authenticated, owner, statusIn(['a'])), ['read'])))!
+    expect(f.cases).toEqual([])
+    expect(f.skipped).toEqual(['read: the condition reads the incoming write, which read does not send'])
   })
 
   it('uses the next candidate when the first would skip list', () => {
@@ -111,12 +113,11 @@ describe('generateTests satisfies the op policy from the facts', () => {
     const tier: Atom = { op: 'eq', left: 'actor.claim.tier', right: { literal: 'pro' } }
     const deleted: Atom = { op: 'isNull', operand: 'resource.deletedAt' }
     const r = rule({ type: 'data-access', target: { store: 'firestore', path: projects }, ops: ['read', 'list'], requires: and(member) })
-    const onlyDeleted = fsFacts(fsPolicy(1, and(member, deleted), ['read', 'list']))
-    const withList = generateTests(r, vocab, onlyDeleted)!
-    const today = generateTests(r, vocab)!
-    expect(withList.cases.filter(c => c.do.op === 'list')).toEqual(today.cases.filter(c => c.do.op === 'list'))
-    expect(withList.skipped).toEqual([])
-    expect(withList.cases[0]!.seed[0]).toEqual({ path: '/projects/projectId-1', data: { deletedAt: null } })
+    // With only that policy, list cannot be tested: the store would refuse an unfiltered list.
+    const onlyDeleted = generateTests(r, vocab, fsFacts(fsPolicy(1, and(member, deleted), ['read', 'list'])))!
+    expect(onlyDeleted.cases.filter(c => c.do.op === 'list')).toEqual([])
+    expect(onlyDeleted.skipped).toEqual(['list: needs query filters to test; read cases cover the condition'])
+    expect(onlyDeleted.cases[0]!.seed[0]).toEqual({ path: '/projects/projectId-1', data: { deletedAt: null } })
     const f = generateTests(r, vocab, fsFacts(fsPolicy(1, and(member, deleted), ['read', 'list']), fsPolicy(2, and(member, tier), ['list'])))!
     const list = f.cases.filter(c => c.do.op === 'list')
     expect(list.map(c => c.name)).toEqual(['list: allowed when every condition holds', `list: denied without ${formatAtom(member)}`])
@@ -176,6 +177,15 @@ describe('generateTests on postgres with facts', () => {
       `read: denied without ${formatAtom(member)}`,
     ])
     for (const c of f.cases) expect(c.seed[0]!.data).toMatchObject({ deleted_at: null })
+  })
+
+  it('skips list when the select policy reads the row, though the rule does not', () => {
+    const admin: Atom = { op: 'eq', left: 'actor.claim.user_role', right: { literal: 'admin' } }
+    const r = rule({ type: 'data-access', target: { store: 'postgres', table: 'projects' }, ops: ['read', 'list'], requires: and(admin) })
+    const f = generateTests(r, vocab, pgFacts(and(authenticated, admin, member)))!
+    expect(f.cases.map(c => c.name)).toEqual(['read: allowed when every condition holds', `read: denied without ${formatAtom(admin)}`])
+    expect(f.cases[0]!.seed).toContainEqual({ path: 'public.memberships', data: { org_id: 'value-1', user_id: 'user-1' } })
+    expect(f.skipped).toEqual(['list: needs query filters to test; read cases cover the condition'])
   })
 })
 

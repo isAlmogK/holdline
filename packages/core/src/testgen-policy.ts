@@ -14,12 +14,15 @@ import { Unsupported, type World } from './testgen-world.js'
 // passes the whole policy and not only the part the rule is about. Candidates are the target's policies for
 // `op`, in facts order, with their path params renamed to the rule target's. The first that is only an "and" of
 // atoms, names no path param the target lacks, can be satisfied together with the rule and adds no per-op skip
-// gives its extra atoms. `[]` when none does (the op then uses the rule atoms alone).
+// gives its extra atoms. Failing that, the first that only adds a per-op skip gives its extras, so the op is
+// skipped: the store would refuse an allow case built from the rule atoms alone. `[]` when neither exists (the op
+// then uses the rule atoms alone).
 // `generatedFrom` hashes only the rule and vocabulary, so a test file reflects the facts at generation time.
 export function policyAtoms(rule: DataAccessRule, op: Op, ruleAtoms: Atom[], vocab: Vocabulary, facts: Facts): Atom[] {
   const alone = solveFor(ruleAtoms, rule, op)
   // When the rule's own atoms cannot be tested on this op, it is skipped either way: keep that reason.
   if (!alone || opSkip(op, ruleAtoms, alone)) return []
+  let untestable: Atom[] | undefined
   for (const { condition } of new FactIndex(facts).alignedPolicies(rule.target, op)) {
     const atoms = andAtoms(expand(condition, vocab))
     if (!atoms || readsMissingParam(atoms, rule.target)) continue
@@ -27,9 +30,11 @@ export function policyAtoms(rule: DataAccessRule, op: Op, ruleAtoms: Atom[], voc
       !ruleAtoms.some(b => equivalent(a, b)) && atoms.findIndex(b => equivalent(a, b)) === i)
     const all = [...ruleAtoms, ...extras]
     const w = solveFor(all, rule, op)
-    if (w && !opSkip(op, all, w)) return extras
+    if (!w) continue
+    if (!opSkip(op, all, w)) return extras
+    untestable ??= extras
   }
-  return []
+  return untestable ?? []
 }
 
 // Two forms of one condition (`a == b` and `b == a`) count as the same atom.
