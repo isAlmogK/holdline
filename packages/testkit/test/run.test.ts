@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({ fail: 'constructor' as 'constructor' | 'exec',
 vi.mock('@electric-sql/pglite', () => ({
   PGlite: class {
     constructor() { if (state.fail === 'constructor') throw new Error('wasm failed') }
+    static async create() { return new this() }
     async exec() { throw new Error('shim failed') }
     async close() { state.closed++ }
   },

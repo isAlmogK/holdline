@@ -146,13 +146,12 @@ rolled back after the case.
 
 | Detail | Value |
 |---|---|
-| Files | `postgres.migrations` globs from `.holdline/config.yaml`, else `supabase/migrations/*.sql`, `prisma/migrations/*/migration.sql`, `drizzle/*.sql`, `migrations/*.sql`, `db/migrations/*.sql`. Sorted by path, each applied in its own transaction |
-| Dialect | `postgres.dialect` from the config, else `supabase` when any file is under `supabase/migrations/`, else `plain` |
-| Supabase shim (before the migrations) | Schemas `auth`, `storage`, `extensions`; roles `anon`, `authenticated`, `service_role`; `auth.uid()` (the `sub` claim as uuid), `auth.jwt()`, `auth.role()` read `request.jwt.claims`; table `auth.users (id uuid primary key, email text)` |
+| Files and dialect | As the Postgres analyzer finds them (facts.md "Postgres analyzer"): `postgres.migrations` globs from `.holdline/config.yaml`, else the default globs; `postgres.dialect`, else `supabase` when a file is under `supabase/migrations/`, else `plain`. Each file is applied in its own transaction |
+| Supabase shim (before the migrations) | The analyzer's shim: schemas `auth`, `storage`, `extensions`; roles `anon`, `authenticated`, `service_role`; `auth.uid()` (the `sub` claim as uuid), `auth.jwt()`, `auth.role()` read `request.jwt.claims`; tables `auth.users`, `storage.buckets`, `storage.objects` |
 | Roles | `supabase`: `anon` and `authenticated`. `plain`: `holdline_actor`, created by the runner. Either gets usage and all privileges on the tables and sequences of every project schema (not `auth`, `storage`, `extensions`, `information_schema`, `pg_*`) |
 
-The migration code is `packages/testkit/src/migrations.ts`, a temporary copy of `analyzer-postgres`'s `applyMigrations`
-until that package is on `main`.
+The runner applies migrations with `applyMigrations` from `@holdline/analyzer-postgres`, so the tests run on the same
+schema the analyzer reads.
 
 ### Per case
 

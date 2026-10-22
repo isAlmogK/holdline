@@ -94,6 +94,9 @@ importers:
       '@firebase/rules-unit-testing':
         specifier: ^6.0.0
         version: 6.0.0(firebase@13.1.0)
+      '@holdline/analyzer-postgres':
+        specifier: workspace:*
+        version: link:../analyzer-postgres
       '@holdline/core':
         specifier: workspace:*
         version: link:../core

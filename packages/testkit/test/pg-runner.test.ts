@@ -1,7 +1,7 @@
 import type { PGlite } from '@electric-sql/pglite'
 import type { TestCase, TestFile } from '@holdline/core'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { applyMigrations } from '../src/migrations.js'
+import { applyMigrations } from '@holdline/analyzer-postgres'
 import { prepareRoles } from '../src/pg-actor.js'
 import { runPostgresFile } from '../src/pg-runner.js'
 import { project, SLOW } from './helpers.js'
@@ -46,7 +46,7 @@ describe('runPostgresFile (supabase)', () => {
   let db: PGlite
   beforeAll(async () => {
     const r = await applyMigrations(await project({ 'supabase/migrations/1.sql': SCHEMA }), {})
-    expect(r.error).toBeUndefined()
+    expect(r.failure).toBeUndefined()
     db = r.db
     await prepareRoles(db, 'supabase')
   }, SLOW)
@@ -218,7 +218,7 @@ describe('runPostgresFile (supabase)', () => {
 describe('runPostgresFile (plain)', () => {
   it('plain dialect acts as holdline_actor', async () => {
     const r = await applyMigrations(await project({ 'migrations/1.sql': 'create table things (id int primary key, name text not null); create table secrets (id int primary key);' }), {})
-    expect(r.error).toBeUndefined()
+    expect(r.failure).toBeUndefined()
     await prepareRoles(r.db, 'plain')
     // Not a superuser: a table the actor role has no privilege on is denied.
     await r.db.exec('revoke all on public.secrets from holdline_actor')

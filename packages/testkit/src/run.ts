@@ -2,11 +2,11 @@
 // Storage files in one emulator run. A runner that cannot start is an infrastructure failure, not a case result.
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { applyMigrations, type MigrationRun } from '@holdline/analyzer-postgres'
 import type { HoldlineConfig, TestFile } from '@holdline/core'
 import { runOnEmulator } from './emulator.js'
 import { resolveRulesFile } from './firebase-rules.js'
 import type { FirebaseInput } from './firebase-runner.js'
-import { applyMigrations, type MigrationResult } from './migrations.js'
 import { prepareRoles } from './pg-actor.js'
 import { runPostgresFile, type CaseKind } from './pg-runner.js'
 import type { CaseResult, FileReport, InfraFailure, TestReport } from './report.js'
@@ -41,16 +41,16 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 async function runPostgres(root: string, config: HoldlineConfig, items: TestItem[], out: Map<TestItem, CaseResult[]>): Promise<string | undefined> {
   for (const item of items) {
-    let migrated: MigrationResult
+    let migrated: MigrationRun
     try {
       migrated = await applyMigrations(root, config)
     } catch (e) {
       return `the Postgres runner could not start: ${message(e)}`
     }
-    const { db, dialect, files, error } = migrated
+    const { db, dialect, migrations, failure } = migrated
     try {
-      if (files.length === 0) return NO_MIGRATIONS
-      if (error) return `migration ${error.file} failed: ${error.message}`
+      if (migrations.length === 0) return NO_MIGRATIONS
+      if (failure) return `migration ${failure.file} failed: ${failure.message}`
       await prepareRoles(db, dialect)
       out.set(item, await runPostgresFile(db, item.file, item.kind, dialect))
     } catch (e) {
