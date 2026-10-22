@@ -1,6 +1,6 @@
 # Holdline Phase 1: Data Layers
 
-**Status:** Step 0 and Tracks A, B and C implemented (2026-10-21). Section 1 item 2 on the golden apps is still open; see [As built (step 0)](#as-built-step-0), [As built (Track A)](#as-built-track-a), [As built (Track B)](#as-built-track-b) and [As built (Track C)](#as-built-track-c).
+**Status:** Implemented (2026-10-22). Step 0 and Tracks A, B and C are built; see [As built (step 0)](#as-built-step-0), [As built (Track A)](#as-built-track-a), [As built (Track B)](#as-built-track-b) and [As built (Track C)](#as-built-track-c).
 
 **Feature:** [Holdline feature and core design](2026-10-21-holdline-design.md) in this repo. This spec covers Phase 1 (spec 2 in the feature spec's table): the Postgres and Firestore/Storage analyzers and the database test runner.
 
@@ -472,12 +472,17 @@ Track C (section 5) is built: `packages/testkit`, `holdline test` and the invari
 [rules file reference](../../reference/rules-file.md#test-cases-holdlineteststrule-idyaml) describes generation. This
 list records where the code differs from section 5 and the decisions made while building it.
 
-**Not done: section 1 item 2 on the golden apps.** Tracks A and B have not merged to `main`, so `golden-supabase` and
-`golden-firebase` have no migrations, rules or breakages to run. That is the remaining step of Track C: rebase on
-`main`, replace `packages/testkit/src/migrations.ts` (a temporary copy of Track A's `applyMigrations` behind the same
-signature) with the import from `analyzer-postgres`, and add a golden test that runs `holdline test` green on each
-clean app and red for each data-access rule's breakage. Item 2 is exercised today only on the hand-built fixtures
-`packages/cli/test/fixtures/test-pg` and `test-fb`.
+**Section 1 item 2 on the golden apps** was finished after Tracks A and B merged: Track C rebased on `main`, the
+runner applies migrations with `analyzer-postgres`'s `applyMigrations`, and `packages/cli/test/golden-test.test.ts`
+runs `holdline test` green on each clean golden app and red on exactly the matching rule for each data-access rule's
+breakage (the `golden-firebase` half is `@emulator`, so it runs in CI). Running it on `golden-supabase` found two
+gaps, fixed with it: a denied `isNull` seeded `'not-null'` into a `timestamptz` column (5.2 Values), and a `list`
+allow case was built from the rule's atoms although the select policy reads the row (5.4 Data-access with facts).
+Invariant breakages are not part of item 2: `golden-supabase` R-010 (an enum that gains a value) stays green under
+`holdline test`, because the reject case tries one invalid label, not the new one; `holdline check` catches it.
+The root `vitest.config.ts` gained a third project, `golden-apps` (`golden-patch.test.ts` and `golden-test.test.ts`,
+`groupOrder` 2): run alongside the other PGlite suites, they pushed Track A's cold-scan timing test and a
+`test-command` case past their limits.
 
 | Section | As built |
 |---|---|

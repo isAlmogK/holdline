@@ -29,7 +29,8 @@ function skipCopy(appDir: string, src: string): boolean {
   return parts[0] === 'breakages' || parts.includes('node_modules')
 }
 
-export async function runPatchedApp(appDir: string, patchFile?: string): Promise<PatchedAppRun> {
+// A temp copy of the app without its breakages, with its expected rules as holdline.rules and the patch applied.
+export async function copyPatchedApp(appDir: string, patchFile?: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holdline-golden-'))
   await cp(appDir, root, { recursive: true, filter: src => !skipCopy(appDir, src) })
   await cp(join(appDir, 'expected-rules.yaml'), join(root, 'holdline.rules'))
@@ -40,6 +41,11 @@ export async function runPatchedApp(appDir: string, patchFile?: string): Promise
       throw new Error(`git apply ${patchFile} failed: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
+  return root
+}
+
+export async function runPatchedApp(appDir: string, patchFile?: string): Promise<PatchedAppRun> {
+  const root = await copyPatchedApp(appDir, patchFile)
   const scan = await runCli(['scan'], { cwd: root })
   const checkOut = await runCli(['check', '--format', 'json', '--strict'], { cwd: root })
   let json: PatchedAppRun['check']['json']
