@@ -1,0 +1,14 @@
+diff --git a/supabase/migrations/20261001000000_organizations.sql b/supabase/migrations/20261001000000_organizations.sql
+index dca943f..d66c76a 100644
+--- a/supabase/migrations/20261001000000_organizations.sql
++++ b/supabase/migrations/20261001000000_organizations.sql
+@@ -10,8 +10,7 @@ create table public.organizations (
+ create table public.memberships (
+   org_id uuid not null references public.organizations (id) on delete cascade,
+   user_id uuid not null references auth.users (id) on delete cascade,
+-  role public.membership_role not null default 'member',
+-  constraint memberships_org_user_key unique (org_id, user_id)
++  role public.membership_role not null default 'member'
+ );
+ 
+ create table public.profiles (

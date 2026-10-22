@@ -198,7 +198,7 @@ right of `in` as a one-element array that it seeds (see rules-file.md "Generatio
 | Store | Format | Example |
 |---|---|---|
 | Firestore, Storage | Path pattern with operand placeholders | `/accounts/{param.accountId}/members/{actor.uid}` |
-| Postgres | `pg:<table>?<column>={<operand>}&<column>={<operand>}...` | `pg:public.team_members?team_id={resource.team_id}&user_id={actor.uid}` |
+| Postgres | `pg:<table>?<column>={<operand>}&<column>={<operand>}...`, columns sorted by name | `pg:public.team_members?team_id={resource.team_id}&user_id={actor.uid}` |
 
 Placeholders are `{<operand>}` and must be a valid operand. Two `exists` atoms are the same only when `doc` is
 string-equal, so analyzers must emit a canonical form (same column order, same operand spelling).
@@ -394,6 +394,275 @@ analyzer should emit a diagnostic with that file's path and keep going. Today an
 set-quantified rule `unknown`, and a `symbol`-target access rule only when the error is in its own file or its
 evidence's files (see "Diagnostics and `unknown`"). An analyzer crash (`file: ''`) also makes `holdline check` exit 3
 after printing its results (see rules-file.md "`holdline check` and exit codes").
+
+## Postgres analyzer (`packages/analyzer-postgres`)
+
+Name `postgres`, version `0.1.0`. Sources: `packages/analyzer-postgres/src/*.ts`. Worked examples:
+`examples/golden-supabase` (Supabase dialect, tables and policies) and `examples/golden-ts-postgres` (plain dialect,
+tables only).
+
+The analyzer applies the project's migrations to an in-memory Postgres (PGlite 0.5.11, Postgres 18) and reads the
+catalog. It parses SQL with `libpg-query` 18 only for statement locations and policy expressions. Both libraries
+load lazily (dynamic `import()`) when `analyze` or `applyMigrations` runs; importing the package loads neither.
+
+### Detection and dialect (`detect.ts`)
+
+| Item | Behavior |
+|---|---|
+| Migrations | The `postgres.migrations` globs when set, otherwise the default globs, matched against `ctx.files` with `matchFiles` |
+| Default globs | `supabase/migrations/*.sql`, `prisma/migrations/*/migration.sql`, `drizzle/*.sql`, `migrations/*.sql`, `db/migrations/*.sql` |
+| Apply order | All matched paths sorted together. Every supported tool names migrations so that sorted order is apply order |
+| `detect` | True when `postgres.migrations` is set, a file matches, or `prisma/schema.prisma` exists (so the analyzer can say why there are no tables) |
+| Dialect | `postgres.dialect` when set. Otherwise `supabase` when a matched path matches `supabase/migrations/*.sql`, else `plain`. A custom glob over Supabase migrations in another folder gives `plain` unless `dialect: supabase` is set |
+
+### Applying migrations (`migrate.ts`, `shim.ts`)
+
+1. Start a fresh PGlite with the contrib extensions `uuid_ossp` and `pgcrypto` loaded. Any other extension fails
+   its migration (`extension "postgis" is not available`).
+2. For dialect `supabase`, run the shim below.
+3. Run each migration in its own transaction. Stop at the first failure: later migrations would run against the wrong schema.
+4. After each migration, restore the dialect's `search_path`: `"$user", public, extensions` for `supabase`, PGlite's
+   startup value (`public`) for `plain`. A session-level `SET search_path` or pg_dump's
+   `set_config('search_path', '', false)` would otherwise change how later migrations resolve names and how the
+   catalog prints them.
+
+An error outside a migration (the shim, reading the `search_path`) closes the database and is thrown.
+
+The Supabase shim:
+
+| Object | Definition |
+|---|---|
+| Schemas | `auth`, `storage`, `extensions` |
+| Extensions | `uuid-ossp` and `pgcrypto`, created in schema `extensions` |
+| Roles | `anon` and `authenticated` (`nologin noinherit`), `service_role` (also `bypassrls`) |
+| Privileges | `usage` on `public`, `auth`, `storage` and `extensions` to all three roles. Default privileges in `public` grant all on tables, sequences and functions to all three. The shim's own tables get no grants |
+| Claims | `nullif(current_setting('request.jwt.claims', true), '')`: a rolled-back local setting reads as `''` |
+| `auth.jwt()` | The claims as `jsonb` |
+| `auth.uid()` | `(<claims>::json ->> 'sub')::uuid` |
+| `auth.role()` | `<claims>::json ->> 'role'` |
+| Tables | `auth.users (id uuid primary key, email text)`; `storage.buckets (id text primary key, name text not null, public boolean not null default false)`; `storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text references storage.buckets, name text, owner uuid, metadata jsonb)` |
+| `search_path` | `"$user", public, extensions` for the session, restored after each migration |
+
+The plain dialect runs no shim and keeps PGlite's default `search_path` (restored after each migration).
+
+`applyMigrations` applies a project's migrations exactly as the analyzer does, for the database test runner:
+
+```ts
+function applyMigrations(root: string, config: HoldlineConfig, files?: readonly string[]): Promise<MigrationRun>
+interface MigrationRun {
+  db: PGlite                                    // the caller closes it, after a failure too
+  dialect: 'supabase' | 'plain'
+  migrations: { path: string; sql: string }[]   // in apply order
+  failure?: { file: string; line?: number; message: string } // the first failing migration; later ones were not applied
+}
+```
+
+`files` defaults to `listFiles(root)`. A failing migration is returned as `failure`, never thrown. The package also
+exports `detectPostgres`, `findMigrations`, `readMigrations`, `runMigrations`, `analyzeMigrations` and `factsFromDatabase`.
+
+### Tables (`tables.ts`)
+
+One table per ordinary or partitioned table (`relkind` `r` or `p`) outside `information_schema` and `pg_*`, and for
+dialect `supabase` outside `auth`, `storage` and `extensions`. Sorted by schema, then name.
+
+| Field | As built |
+|---|---|
+| `id`, `name` | `pg:<schema>.<table>`, `<schema>.<table>`, exactly as Postgres stores the names |
+| `columns` | In column order. `nullable` is `not attnotnull` |
+| `columns[].type` | `format_type`, shortened: `timestamp(p) with time zone` → `timestamptz(p)`, `timestamp(p) without time zone` → `timestamp(p)`, the same for `time` and `timetz`, `character varying` → `varchar`, `character` → `char`. Everything else as Postgres prints it (`integer`, `numeric(10,2)`, `text[]`, an enum's type name) |
+| `columns[].default` | `pg_get_expr` of the default. A quoted literal loses its cast (`'member'::member_role` → `'member'`); anything else stays verbatim (`gen_random_uuid()`, `now()`, `0`) |
+| `primaryKey` | In key order |
+| `foreignKeys` | Columns in key order; `references.table` is `<schema>.<table>` |
+| `uniques` | Unique constraints, then unique indexes that back no constraint and are neither partial nor on expressions (key columns only, not `INCLUDE`) |
+| `checks` | `{ name, expr }`: `pg_get_constraintdef` without the outer `CHECK (…)` and without a trailing ` NOT VALID`, in Postgres' own spelling (`(amount > 0)`) |
+| `enums` | One per column whose type is an enum, labels in sort order |
+| `rlsEnabled` | `relrowsecurity`. `FORCE ROW LEVEL SECURITY` is not read |
+| `location` | The latest `CREATE TABLE` (see "Locations") |
+
+Foreign keys, unique constraints and checks are each ordered by first key column, then constraint name; extra unique
+indexes by first key column, then index name. Postgres 18's NOT NULL constraints are ignored: nullability comes from the column.
+
+### Policy conditions (`normalize.ts`, `operand.ts`, `atoms.ts`, `subquery.ts`, `inline.ts`)
+
+Each condition is `pg_get_expr(polqual | polwithcheck, polrelid)`, parsed as `SELECT <expr>`. The catalog is read in
+one transaction with a local `search_path` of `"$user", public, extensions` (`supabase`) or `public` (`plain`),
+whatever the session has, so names print relative to the schemas the normalizer resolves through. The tables below are the
+whole mapping. Anything else becomes `{ opaque: <SQL text> }` for the smallest part that could not be mapped. A
+mapping may allow more than the SQL, never less; `packages/analyzer-postgres/test/soundness.test.ts` checks this
+against real Postgres.
+
+**Operands**
+
+| SQL | Operand |
+|---|---|
+| `auth.uid()` | `actor.uid` (Supabase only) |
+| `auth.role()` | `actor.role` (Supabase only) |
+| `auth.jwt() ->> 'k'`, `(auth.jwt() -> 'a') ->> 'k'` | `actor.claim.k`, `actor.claim.a.k` (Supabase only; keys `[A-Za-z0-9_]+`) |
+| `(SELECT <x>)` with no `FROM` or anything else | The operand of `<x>` |
+| `auth.uid()::text`, `<claim>::text` | Unchanged. Any other cast on a non-constant is not an operand |
+| A column of the policy's table, bare or qualified by table or schema and table | `resource.<c>` in `USING`, `incoming.<c>` in `WITH CHECK`. Only for names matching `[A-Za-z0-9_]+`: any other (`"owner-id"`, `créé`) is not an operand, since core's operand pattern can't hold it |
+| A helper function's parameter, by name or `$n` | The operand the caller passed |
+| A constant (string, integer, decimal, `true`, `false`, `NULL`) | `{ literal }`, with a cast applied as below |
+
+**Casts on constants**
+
+| Cast | Result |
+|---|---|
+| To `int2`, `int4`, `int8`, `integer`, `smallint`, `bigint` | A number, when the value (or numeric string) is an integer. Otherwise not a constant |
+| To `numeric`, `decimal`, `float4`, `float8`, `real` | A number, from a number or a numeric string |
+| A number or boolean to `text`, `varchar`, `bpchar`, `char`, `character`, `name` | Its text (`1.50` as written, `'true'`) |
+| To `bool` or `boolean` | Only from a boolean |
+| A string to `uuid` | The string, lowercased |
+| To `citext`, any cast with a type modifier (`::varchar(3)`), any array cast (`'{a,b}'::text[]`) | Not a constant |
+| A string to any other type (an enum, `date`) | The string unchanged |
+| A number or boolean to any other type | Not a constant |
+| `NULL` to any type | `null` |
+
+**Conditions**
+
+| SQL | Expr |
+|---|---|
+| `AND`, `OR`, `NOT` | `and`, `or`, `not` |
+| `true`, `false` | `{ and: [] }`, `{ or: [] }` |
+| `a = b`, `a <> b` | `eq`, `ne` (see "Comparisons with the caller") |
+| `a < b`, `a > b` | `lt`, `gt`, only when exactly one side is a number literal |
+| `a IN (v, …)`, `a = ANY (ARRAY[v, …])` | `in` with an array literal. Every `v` is a string or number constant; a cast around the whole array is opaque |
+| `auth.uid() IS NULL`, `auth.uid() IS NOT NULL` | `not(authenticated)`, `authenticated` |
+| `x IS NULL`, `x IS NOT NULL` for any other operand | `isNull`, `not(isNull)`. Opaque when `x` is another `actor.*` operand |
+| `(SELECT <expr>)` | `<expr>` |
+| `EXISTS (…)`, `x IN (SELECT …)` | `exists`, see "Subqueries" |
+| A call to a function | Its inlined body, see "Helper functions" |
+
+**Comparisons with the caller.** A Supabase anonymous caller still carries the anon key's claims (`role` = `anon`,
+`iss`, `ref`, `aud`, `iat`, `exp`), while the facts model it as "no actor", for which every actor atom is false.
+So comparisons on those values are mapped only where both agree:
+
+| Comparison | Expr |
+|---|---|
+| `actor.role` or `actor.claim.role` `=` a string literal | `eq`; `= 'anon'` gives `not(authenticated)` |
+| `actor.role` or `actor.claim.role` `IN` a list of strings without `'anon'` | `in` |
+| Any other comparison on the role (`<>`, `<`, a list with `'anon'`, a non-string, a column) | opaque |
+| Any comparison on `actor.claim.iss`, `.ref`, `.aud`, `.iat`, `.exp` (and their sub-keys) | opaque |
+| Another claim `=` or `<>` a plain string literal; `IN` a list of plain strings | `eq`, `ne`, `in` |
+| Another claim with `<` or `>`, or against a column, a number, or a string that reads as `true`, `false`, `null` or a number, or that starts (after spaces) with `{`, `[` or `"` | opaque: `->>` yields text, but the claim's JSON value may be a boolean, number or null, and an object, array or nested string comes back as its JSON text (`{}`) |
+
+**Subqueries.** `EXISTS (SELECT … FROM t WHERE t.a = <x> AND t.b = <y>)` becomes `exists(pg:<schema>.t?a={x}&b={y})`.
+`<x> IN (SELECT t.c FROM t WHERE …)` becomes the same with `c={x}` added. All of these must hold, otherwise the subquery is opaque:
+
+| Requirement | Why |
+|---|---|
+| Positive position: an even number of `NOT`s above it, counting through inlined helpers | Under RLS on `t` the subquery may see fewer rows, so `exists` is too weak to negate |
+| One table in `FROM`: no join, no `ONLY`, no column alias list (`t m(a, b)`) | |
+| No `GROUP BY`, `HAVING`, `WITH`, `DISTINCT`, `LIMIT`, `OFFSET`, `ORDER BY`, `FOR UPDATE`, `WINDOW` or set operation | |
+| `EXISTS` selects only constants, `*` or plain columns | `SELECT count(*)` returns a row even with no match |
+| `IN` uses `=`, selects one column of `t`, and its left side is an outer operand as below | |
+| `WHERE` is an `AND` of `<column of t> = <outer operand>` (either order), and no column equals two different operands. At least one condition in total: an `IN` supplies its own `c={x}`, so `x IN (SELECT t.c FROM t)` needs no `WHERE` | The doc format holds only operand placeholders, so a literal (`m.role = 'admin'`) makes it opaque |
+| No outer operand is a literal or an `actor.*` operand other than `actor.uid` | An `exists` with `{actor.…}` is false for an anonymous caller, but the role and the anon-key claims are set for one; and SQL compares a claim's text (`->>`) with the column, while its JSON value may be a number or a boolean |
+| The table resolves: schema-qualified, or the first schema on the search path that has it | `public`, `extensions` for Supabase; `public` for plain; a helper's own `SET search_path` inside its body |
+| Every schema, table and column name in the doc matches `[A-Za-z0-9_]+` | Others (`&`, `=`, `?`, `{`, `}`) could make the doc ambiguous |
+
+Inside a subquery, its table's columns win over the policy table's, as in SQL. A column of an enclosing subquery's
+table makes the condition opaque. Doc columns are sorted by name.
+
+**Helper functions.** A call is replaced by the function's body when all of these hold:
+
+| Requirement | Detail |
+|---|---|
+| `LANGUAGE sql`, `STABLE` or `IMMUTABLE`, and the body is one `SELECT <expr>` with nothing else | |
+| The name resolves | Schema-qualified, or the first schema on the search path with that name and arity. A name that exists in `pg_catalog` is never inlined: Postgres searches `pg_catalog` first |
+| One function has that name and arity | Overloads with the same arity are not inlined |
+| Every argument is an operand, and the call has no `*`, `DISTINCT`, `OVER`, `VARIADIC`, `FILTER` or `ORDER BY` | |
+| At most 10 levels of nesting | |
+
+Inside the body, parameters (by name or `$n`) are the caller's operands, the policy's table is not in scope, and the
+function's own `SET search_path` (without `$user`, `pg_temp` and `pg_catalog`) replaces the search path. Each inlined
+helper is listed as `schema.name` in the policy's `functions`, also when its body ended opaque.
+
+In the plain dialect `auth.uid()`, `auth.jwt()` and `auth.role()` are not mapped. If the migrations define them, they
+are inlined like any other helper.
+
+### Policies (`policies.ts`, `anon.ts`)
+
+One policy fact per `pg_policy` row on an emitted table and per op: `id` `pg:<schema>.<table>#policy:<name>` (the
+same id for each op of a row), `store` `pg-rls`, `target` `<schema>.<table>`, `ops` one op, `functions` sorted,
+`evidence` the latest `CREATE POLICY`.
+
+| `polcmd` | Ops | Condition |
+|---|---|---|
+| `r` SELECT | `read`, `list` | `USING` (on `resource.*`) |
+| `a` INSERT | `create` | `WITH CHECK` (on `incoming.*`) |
+| `w` UPDATE | `update` | Its own `USING`, AND the OR of the `WITH CHECK` of every permissive UPDATE policy on the table. Postgres ORs the two kinds of clause separately |
+| `d` DELETE | `delete` | `USING` |
+| `*` ALL | all five | As above, per op |
+
+A missing clause is `TRUE`. `WITH CHECK` defaults to `USING`.
+
+**Roles.** Each condition `c` is wrapped for the callers its roles cover. A signed-in Supabase caller has the role
+`authenticated`, an anonymous one `anon`. A policy covers a caller when `polroles` holds `PUBLIC` or a role whose
+privileges the caller's role has, `pg_has_role(<caller role>, <policy role>, 'USAGE')`, which is how Postgres decides
+whether a policy applies. So a custom role granted to `authenticated` `WITH INHERIT TRUE` covers signed-in callers. The
+shim's `anon` and `authenticated` are `NOINHERIT`, as in Supabase, so a plain `GRANT editors TO authenticated` does not
+(nor does it in Postgres). `readCatalog` returns this as `coversSignedIn` and `coversAnon` on each policy row.
+
+| Dialect and coverage | Permissive | Restrictive |
+|---|---|---|
+| Supabase: covers both callers (`public`, both roles, or roles they inherit) | `c` | `c` |
+| Supabase: covers signed-in callers only | `and[authenticated, c]` | `or[not(authenticated), c]` |
+| Supabase: covers anonymous callers only | `and[not(authenticated), c]` | `or[authenticated, c]` |
+| Supabase: covers neither (`service_role`, a custom role neither inherits) | Skipped, with a warning | Skipped, with a warning |
+| Plain: includes `public` | `c` | `c` |
+| Plain: only other roles | `c` (the caller may have that role) | Dropped (the caller may not have it) |
+
+Every restrictive condition for a table and op is ANDed into each permissive policy's condition for the same table
+and op. Dropping a restrictive policy only allows more. With no permissive policy there is no fact, which means denied.
+
+**Sign-in.** The final condition is evaluated for an anonymous caller, three-valued: `authenticated` is false; a
+comparison or `isNull` with an actor operand is false, except the role and the anon-key claims; an `exists` whose doc
+has `{actor.` is false; `opaque` is unknown. When the condition is certainly false, `authenticated` is added as its
+first conjunct (unless its top-level `and` already has one). A condition such as `owner_id = auth.uid()` therefore
+gets `authenticated`; `auth.role() = 'admin'` does not.
+
+### Locations and symbols (`locations.ts`, `facts.ts`)
+
+Each migration is parsed with `libpg-query`. A statement's line is the line of its first token after whitespace and
+comments. A table is located at its latest `CREATE TABLE` and a policy at its latest `CREATE POLICY`, across all
+migrations in apply order. Unqualified names count as `public`. Other statements (`ALTER TABLE`, `CREATE TABLE AS`)
+give no location. A migration the parser rejects gives none. The schema itself always comes from the catalog.
+
+Symbols: one `table` symbol per table and one `policy` symbol per policy id, `lang` `sql`, with the location when
+there is one. No column symbols.
+
+### Diagnostics
+
+| When | Severity | `file` | Message |
+|---|---|---|---|
+| A migration fails | error | The migration | The Postgres error, plus ` (line N)` when Postgres gives a position. The output holds only this diagnostic: no tables, symbols or policies |
+| `postgres.migrations` is set and matches nothing | error | `.holdline/config.yaml` | `postgres.migrations matches no files` |
+| Only `prisma/schema.prisma`, no migrations and no config | warning | `prisma/schema.prisma` | `no SQL migrations found; run prisma migrate or point holdline at a schema dump` |
+| A Supabase policy covers neither `anon` nor `authenticated` callers | warning | The policy's migration (`''` without a location) | `policy "<name>" on <schema>.<table> applies only to roles <roles>; Holdline models the anon and authenticated roles, so it was skipped` |
+
+### Cache
+
+The whole output is one `FileCache` entry: analyzer `postgres`, version `0.1.0`, content
+`JSON.stringify({ dialect, migrations: [{ path, sql }] })`. A scan whose migrations, paths and dialect are unchanged
+starts neither PGlite nor the parser. A cached migration failure stays until a migration changes. The analyzer does
+not use `recognizers`.
+
+### Known limits
+
+| Limit | Effect |
+|---|---|
+| Partitions | Each partition is also emitted as its own table |
+| Generated columns | The generation expression appears as the column's `default` |
+| `uniques` | Constraints come before indexes; they are not merged by column position |
+| `CHECK … NO INHERIT` | The trailing `NO INHERIT` stays in `expr` |
+| Numbers | Integers above 2^53 lose precision; `float4` rounding is not modelled |
+| Search path | Relation names don't resolve through `pg_temp` or an implicit `pg_catalog`; an explicit `pg_catalog` position in a helper's `SET search_path` is dropped |
+| Conditions | A signed-in wrap plus a restriction can repeat `authenticated` in nested `and`s (harmless) |
+| Typed comparisons | Comparing two columns (an `exists` doc's `c={resource.x}`, `a = b`) assumes plain equality. `citext`, `bpchar` padding and nondeterministic collations are not modelled |
+| Locations | Nested `/* /* */ */` comments before a statement can shift its reported line |
+| Opaque text | `{ opaque }` text is cut from the expression by token positions, best effort: parentheses inside strings and `E''` or dollar-quoted strings can widen or cut it. It is shown to people, never compared |
+| Supabase `db pull` | A migration that references objects the shim lacks (`pg_graphql`, `supabase_vault`, `pg_stat_statements`, the `graphql` or `vault` schemas, roles such as `supabase_admin`) fails with an error diagnostic, so its rules become unknown |
 
 ## Firestore and Storage analyzer (`packages/analyzer-firestore`)
 

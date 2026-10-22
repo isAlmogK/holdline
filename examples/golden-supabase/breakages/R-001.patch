@@ -1,0 +1,13 @@
+diff --git a/supabase/migrations/20261003000000_rls.sql b/supabase/migrations/20261003000000_rls.sql
+index 5da0f21..72fc109 100644
+--- a/supabase/migrations/20261003000000_rls.sql
++++ b/supabase/migrations/20261003000000_rls.sql
+@@ -24,7 +24,7 @@ create policy "members read live projects" on public.projects
+   for select to authenticated
+   using (
+     deleted_at is null
+-    and org_id in (select m.org_id from public.memberships m where m.user_id = (select auth.uid()))
++    and auth.uid() is not null
+   );
+ 
+ create policy "members create projects" on public.projects

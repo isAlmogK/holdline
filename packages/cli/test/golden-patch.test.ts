@@ -119,12 +119,12 @@ describe.skipIf(apps.length === 0)('golden apps with file-patch breakages', () =
     describe(app.name, () => {
       it('passes every expected rule on the clean app', async () => {
         expectClean(await runPatchedApp(app.dir))
-      })
+      }, 120_000)
       for (const patch of app.breakages) {
         const rule = patch.replace(/^.*\//, '').replace(/\.patch$/, '')
         it(`catches ${rule}`, async () => {
           expectCaught(await runPatchedApp(app.dir, patch), rule)
-        })
+        }, 120_000)
       }
     })
   }

@@ -1,0 +1,12 @@
+diff --git a/supabase/migrations/20261002000000_projects.sql b/supabase/migrations/20261002000000_projects.sql
+index 4bb53c0..8c57dfc 100644
+--- a/supabase/migrations/20261002000000_projects.sql
++++ b/supabase/migrations/20261002000000_projects.sql
+@@ -1,6 +1,6 @@
+ create table public.projects (
+   id uuid primary key default gen_random_uuid(),
+-  org_id uuid not null references public.organizations (id),
++  org_id uuid references public.organizations (id),
+   owner_id uuid not null references auth.users (id),
+   name text not null,
+   status text not null default 'active',
