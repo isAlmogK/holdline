@@ -206,6 +206,7 @@ Generated test values are strings (`user-1`, `value-1`, `orgId-1`). The runner m
 |---|---|
 | `uuid` | A UUID as is; any other string becomes its UUID v5 (fixed namespace, name `holdline:<value>`). The case remembers the mapping for claims |
 | numeric (`smallint` … `double precision`, `serial`) | A string becomes a stable integer in 1..30000 (fits `smallint`); a number stays |
+| `date`, `timestamp…` | A value starting `YYYY-MM-DD` as is; any other string (`not-null`, `value-1`) becomes a stable day after the epoch filler, `stableInt(value)` days in (as a date for `date`, an ISO timestamp otherwise) |
 | `json`, `jsonb` | The value as JSON text |
 | `<type>[]` | Each element mapped as `<type>` |
 | anything else | The value as is; `null` stays `null` |

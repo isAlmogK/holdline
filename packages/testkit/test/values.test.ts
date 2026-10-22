@@ -21,6 +21,16 @@ describe('values', () => {
     expect(mapValue('x', 'text', uuids)).toBe('x')
     expect(isUuid('nope')).toBe(false)
   })
+  it('maps a placeholder in a date or timestamp column to a stable date after the filler, keeping real dates', () => {
+    const uuids = new Map<string, string>()
+    const ts = mapValue('not-null', 'timestamp with time zone', uuids)
+    expect(ts).toBe(new Date(stableInt('not-null') * 86_400_000).toISOString())
+    expect(mapValue('not-null', 'timestamp without time zone', uuids)).toBe(ts)
+    expect(mapValue('not-null', 'date', uuids)).toBe((ts as string).slice(0, 10))
+    expect(mapValue('value-2', 'date', uuids)).not.toBe(mapValue('value-1', 'date', uuids))
+    expect(mapValue('1970-01-01T00:00:00Z', 'timestamptz', uuids)).toBe('1970-01-01T00:00:00Z')
+    expect(mapValue('2026-10-22', 'date', uuids)).toBe('2026-10-22')
+  })
   it('stableInt stays within smallint range, is stable, and does not collide for generator values', () => {
     const names = ['value-1', 'value-2', 'other-value', 'user-1', 'user-2', 'filler', 'missing-1', 'not-allowed', 'not-null']
     for (const n of names) {

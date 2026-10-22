@@ -3,6 +3,7 @@ import { isNumericType } from '@holdline/core'
 
 const URL_NAMESPACE = '6ba7b811-9dad-11d1-80b4-00c04fd430c8'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}/
 
 export function isUuid(s: string): boolean {
   return UUID.test(s)
@@ -38,6 +39,11 @@ export function mapValue(value: unknown, type: string, uuids: Map<string, string
     return mapped
   }
   if (isNumericType(t) && typeof value === 'string') return stableInt(value)
+  if ((t === 'date' || t.startsWith('timestamp')) && typeof value === 'string' && !ISO_DATE.test(value)) {
+    // A placeholder (`not-null`, `value-1`) becomes a stable day after the epoch filler.
+    const day = new Date(stableInt(value) * 86_400_000).toISOString()
+    return t === 'date' ? day.slice(0, 10) : day
+  }
   if (t === 'json' || t === 'jsonb') return JSON.stringify(value)
   return value
 }
