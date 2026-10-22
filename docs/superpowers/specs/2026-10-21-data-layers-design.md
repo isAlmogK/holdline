@@ -1,6 +1,6 @@
 # Holdline Phase 1: Data Layers
 
-**Status:** Step 0 and Track A implemented (2026-10-21). Tracks B and C are not built yet; see [As built (step 0)](#as-built-step-0) and [As built (Track A)](#as-built-track-a).
+**Status:** Step 0, Track A and Track B implemented (2026-10-21). Track C is not built yet; see [As built (step 0)](#as-built-step-0), [As built (Track A)](#as-built-track-a) and [As built (Track B)](#as-built-track-b).
 
 **Feature:** [Holdline feature and core design](2026-10-21-holdline-design.md) in this repo. This spec covers Phase 1 (spec 2 in the feature spec's table): the Postgres and Firestore/Storage analyzers and the database test runner.
 
@@ -416,3 +416,51 @@ best effort (parentheses in strings, `E''` and dollar quotes); a real Supabase `
 of the PGlite suites could push past when everything ran at once. The root `vitest.config.ts` therefore runs core's
 tests as their own project before the other packages' (`sequence.groupOrder`). Every test file still runs exactly once,
 and the total time is unchanged.
+
+## As built (Track B)
+
+Track B (section 4, and 6.2 for the golden app) is built. The [facts reference](../../reference/facts.md) ("Firestore and Storage analyzer") describes the code; this list records where it differs from sections 4, 6.2, 7 and 9.
+
+| Section | As built |
+|---|---|
+| 4.1 Detect | `firebase.json` is read at any depth, not only the root. Each pointer is relative to its own directory. The `firestore` and `storage` keys may be objects or arrays (several databases or buckets). A pointer outside the repo or at a missing file, an invalid or unreadable `firebase.json`, and config globs matching no file are errors: each leaves a store's rules incomplete, so checks must not treat the found policies as the whole set. Config globs for a store replace the defaults for that store only. `detect` is also true when discovery only has errors. |
+| 4.2 Parse errors | The message is `line L, column C: <message>`. A rules file that cannot be read is an error diagnostic too, and so is an exception while analyzing one file (`analysis failed: <message>`, e.g. a stack overflow on deep nesting; not cached). Each yields no policies for that file only. |
+| 4.3 Policy ids | A second `allow` that gives the same `<store>:<target>#<op>@<line>` id gets `:<col>` added. |
+| 4.3 Paths | A `$(expr)` segment in a match path renders as a rest wildcard `{_interpN=**}`, because the value may span segments (it overlaps more, never less). The prefix is stripped when its first segment is `databases` (Storage: `b`), its second any single segment (a wildcard, `(default)` or a literal bucket) and its third `documents` (Storage: `o`); a single-segment wildcard also matches the first or third. A rest wildcard (or `$(...)`) within the first three segments gives the target `/{<name>=**}`, covering every document. Any other `match` path is kept in full with a warning; a prefix split across nested matches is recognized. An `allow` directly in the service or the prefix match has target `/`. A function declared twice in one block is a warning and the last one is used. One `match` symbol per distinct (store, target), at its first line. |
+| 4.4 `authenticated` | ANDed per atom that reads `request.auth` (an actor operand, an `exists` or lookup whose path holds `{actor.`), not onto the whole condition. The whole-condition form is unsound for `resource.data.public == true \|\| request.auth.uid == resource.data.owner`: Firestore allows an anonymous read of a public document. The soundness property test catches the whole-condition form. |
+| 4.4 `x.get('f', d)` | Maps to `x.f` when `d` is `null` (the model's absent value), or when neither `d` nor `null` satisfies the comparison against a literal; otherwise `opaque`. `<` and `>` with a fallback map only when both values are numbers. A non-null fallback on both sides, or on the right of `in`, is `opaque` (a `null` default is no fallback). |
+| 4.4 Bare boolean | A boolean value in condition position (`resource.data.published`) is `eq(<operand>, true)`. |
+| 4.4 Storage metadata | `request.resource.metadata.f` maps to `incoming.f`, next to `resource.metadata.f` to `resource.f`. `.data` in Storage files and `.metadata` in Firestore files are `opaque`. |
+| 4.4 More conservative than the table | `opaque`: rest wildcards (`{x=**}`, a path) used as operands or path segments; dotted keys (`data['a.b']`, `get('a.b', d)`, which name one top-level field); integers past 2^53; non-finite float literals (`1.0e999`); floats interpolated into lookup paths; a user function named like a built-in (`get`, `exists`, `getAfter`, `existsAfter`, `debug`, `bool`, `bytes`, `float`, `int`, `string`, `path`); `<=`, `>=`, `is`; `request.auth` compared with anything but `null`. |
+| 4.4 Comparisons | `lt`, `gt` and `in` with an operand (not a literal list) on the right keep Firestore's meaning (ordering of same-type values; list or map-key membership). The prover matches these atoms by identity only, so this is consistent with it. |
+| 4.4 Inlining | Lexical scope: parameters bind to the call's arguments in the caller's scope, `let`s in order. A recursive call is `opaque`. Depth limit 20. A budget of 1000 inlinings per condition, after which calls are `opaque` (stops exponential growth when functions call each other several times), and of 10000 parameter or `let` resolutions, after which a reference is `opaque` (stops `let a1 = a0 && a0; let a2 = a1 && a1; ...`). |
+| 4.4 Vocabulary | A zero-parameter function becomes `{ ref }` only when the file declares that name exactly once, so a shadowing declaration is not replaced by the approved meaning. In value position the function is inlined. Limit of any name-based recognizer: editing the body of the one recognized function keeps emitting the ref; re-approving the vocabulary entry is the guard. |
+| 4.4 Lookups | The database segment (`$(database)`, `(default)`) is accepted unresolved and removed: rules read only their own database, and Storage's `firestore.*` reads `(default)`. A path segment must be one literal or one interpolation of `actor.uid`, `actor.claim.*`, `resource.<f>` or `incoming.<f>` (one field deep), `param.<x>`, or a string or integer literal; anything else makes the lookup `opaque`. |
+| 4.4 Opaque text | The source of the smallest sub-expression that could not be mapped, whitespace collapsed, wrapping parentheses removed. |
+| 4.4 Cache | Key is the file path, the approved recognizers and the content, under the analyzer version. |
+| 6.2 Golden app | Eleven rules (R-001 to R-011) and eleven breakages, one vocabulary entry (`signed-in`, recognizing `signedIn`). R-009's catch-all read is `match /{document=**}` nested under `/orgs/{orgId}`, so it overlaps only the member list among the rule targets. Storage writes have their own rule (R-011). |
+| 6.2 / 2.4 Golden harness | The "unpatched skeleton" test in `packages/cli/test/golden-patch.test.ts` builds its own temporary skeleton, because `golden-firebase` is no longer empty. |
+| 7 Scan summary | `holdline scan` prints, per rules file, `<file>: <n> policies, <k> opaque sub-conditions`, then `  opaque: <text> (line L)` for each distinct text (`packages/cli/src/format/policy-summary.ts`). Text is cut at 120 characters. |
+| 7 Private gate | Zero error diagnostics. The opaque patterns found in a real rules set are listed below; none was both common and exactly mappable, so none was normalized. |
+| 9 Testing | Soundness is checked against a model: a reference interpreter of the rules subset with Firestore's error semantics, and an `Expr` evaluator with absent = `null`. 37 normalization rows, 200 random worlds each, plus a check that each row is exactly true somewhere Firestore allows. The emulator suite (`test/emulator/`) compares the emulator with the interpreter and the `Expr`. It needs `firebase-tools` and Java 21 or newer (firebase-tools 15 refuses older Java) and is skipped, with the reason in its title, otherwise. It has not been run in this branch's development environment (Java 19). Storage rows are checked against the model only. |
+
+Opaque patterns from the private gate, described generically:
+
+- A lookup whose path is keyed by a field of another looked-up document (`exists(/a/$(get(/b/$(request.auth.uid)).data.x)/...)`). Most common. It needs a nested-lookup placeholder, which is a core contract change.
+- List and set methods: `hasAny`, `hasAll`, `hasOnly`.
+- Key presence in a map: `'f' in request.resource.data`.
+- Type checks: `x is string`.
+- `size()` checks, and Storage `request.resource.size` and `contentType`.
+- A `.get('f', d)` whose default satisfies the comparison (correctly opaque).
+- Helper functions that return a computed value (string building) used in a comparison.
+- `resource == null`.
+
+The emulator soundness suite has not been run yet (no Java 21 where it was built); until it runs, the reference interpreter is unverified against Firestore.
+
+**Known gaps, owned elsewhere:**
+
+- `data-access` renames a policy's params before expanding vocabulary refs, so a ref whose expression mentions `param.*` is not aligned to the rule's names (usually a false violation). The Firestore analyzer is the first to emit refs. Owner: core.
+
+- Core's test generator evaluates atoms with absent = undefined, `in` list-only and no `lt`/`gt` (`testgen-eval.ts`). Generated cases for atoms such as `eq(x, null)` from `get('f', null) == null`, or `in` over a map field, may expect a deny where Firestore allows. The result is a red test, not a silent pass. Owner: core and Track C.
+- The generator fills placeholders with `String(v)`. Firestore's own formatting of non-string values, or of values containing `/`, in `$(...)` may differ. Owner: core and Track C.
+- The step 0 gap above (a Storage object path equal to a Firestore lookup path merges seeds) is reachable with `firestore.get` in Storage rules. Owner: Track C.

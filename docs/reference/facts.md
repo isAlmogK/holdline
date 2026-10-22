@@ -2,6 +2,7 @@
 
 The fact graph is what every analyzer emits and every checker reads. This page describes the code as built.
 Sources: `packages/core/src/facts.ts`, `expr.ts`, `paths.ts`, `logic.ts`, `fact-index.ts`, `analyzer.ts`, `config.ts`, `files.ts`, `scan.ts`.
+The Firestore and Storage analyzer is `packages/analyzer-firestore`; see "Firestore and Storage analyzer" below.
 Worked example: `examples/golden-ts-postgres/fixtures/facts.json`.
 
 All schemas are zod `strictObject`s: an unknown key is an error. `parseFacts(json, source)` throws `FactsError`
@@ -108,7 +109,7 @@ A condition that must hold for code at `at` to run.
 | `id` | string | | |
 | `store` | `pg-rls` `firestore` `storage` | | Note `pg-rls`, not `postgres` |
 | `target` | string | | Postgres table or path pattern |
-| `ops` | Op[] (at least 1) | | Firestore `write` is expanded to `create`, `update`, `delete`; `read` to `read` and `list` |
+| `ops` | Op[] (at least 1) | | Firestore `write` is expanded to `create`, `update`, `delete`; `read` to `read` and `list`; `get` to `read` |
 | `condition` | Expr | | The condition under which the policy allows the op |
 | `functions` | string[] | `[]` | Helper functions the condition used |
 | `evidence` | Location, optional | | |
@@ -136,8 +137,10 @@ Ids use names, never line numbers, so they survive refactors. Locations are evid
 | Postgres table | `pg:<schema>.<table>` | `pg:public.dogs` |
 | Postgres column | `pg:<schema>.<table>.<column>` | `pg:public.dogs.team_id` |
 | Postgres policy | `pg:<schema>.<table>#policy:<name>` | `pg:public.dogs#policy:dogs_select_member` |
+| Firestore policy | `firestore:<path pattern>#<op>@<line>` | `firestore:/accounts/{accountId}/things/{thingId}#read@12` |
 | Firestore match | `firestore:<path pattern>` | `firestore:/accounts/{accountId}/dogs/{dogId}` |
 | Storage match | `storage:<path pattern>` | `storage:/accounts/{accountId}/files/{path=**}` |
+| Storage policy | `storage:<path pattern>#<op>@<line>` | `storage:/accounts/{accountId}/files/{path=**}#create@8` |
 
 Rules:
 
@@ -660,6 +663,134 @@ not use `recognizers`.
 | Locations | Nested `/* /* */ */` comments before a statement can shift its reported line |
 | Opaque text | `{ opaque }` text is cut from the expression by token positions, best effort: parentheses inside strings and `E''` or dollar-quoted strings can widen or cut it. It is shown to people, never compared |
 | Supabase `db pull` | A migration that references objects the shim lacks (`pg_graphql`, `supabase_vault`, `pg_stat_statements`, the `graphql` or `vault` schemas, roles such as `supabase_admin`) fails with an error diagnostic, so its rules become unknown |
+
+## Firestore and Storage analyzer (`packages/analyzer-firestore`)
+
+Reads Firestore and Storage security rules and emits `policies`, `symbols` (kind `match`) and `diagnostics`. It emits no
+`collections`. Sources: `discover.ts` (finding rules files), `lexer.ts`, `parser.ts`, `parse-expr.ts`, `parse-path.ts`, `ast.ts`
+(parsing), `expand.ts` (targets, ops, ids), `scope.ts` (scopes, envs, budgets), `inline.ts`, `condition.ts`, `value.ts`, `compare.ts`,
+`lookup-path.ts` (normalization), `simplify.ts`, `analyze-file.ts` (one file's facts), `analyzer.ts`, `index.ts`. No model, no network.
+Name `firestore`, version `0.1.0`.
+
+### Discovery
+
+| Item | Detail |
+|---|---|
+| `detect` | True when `firestore.rules` or `storage.rules` config globs are set, or discovery finds a rules file or an error |
+| Config globs | `firestore.rules` / `storage.rules` globs in `.holdline/config.yaml` replace the defaults for that store only. A glob list that matches no file gives an `error` on `.holdline/config.yaml` |
+| Defaults | For a store with no globs: `firestore.rules` / `storage.rules` at the root, and the `rules` path of every `firebase.json` at any depth. Each path is relative to its own `firebase.json`. The `firestore` and `storage` keys may be an object or an array of objects (several databases or buckets) |
+| `firebase.json` errors | `invalid JSON: <reason>`; `could not read: <reason>`; `points at <path>, which is not in the repository` (outside the repo, `..` or `../...`, or a file not in the repo). Each leaves a store's rules incomplete, so it is an `error`. Other valid JSON shapes are ignored |
+| Files | Sorted and deduplicated. Each is analyzed on its own and cached |
+
+### Parse errors and diagnostics
+
+| Case | Diagnostic |
+|---|---|
+| Parse error | `error`, message `line L, column C: <message>`. The file yields no policies, so the rules that depend on them become `unknown` |
+| File cannot be read | `error`, `could not read: <reason>` |
+| `service` other than `cloud.firestore` and `firebase.storage` | `warning`, skipped |
+| No `service` block | `warning`, `no service block` |
+| A `match` holding allows, or a leaf `match`, whose path cannot match `/databases/{database}/documents` (Storage: `/b/{bucket}/o`) | `warning`, the path is kept in full. A prefix split across nested matches is recognized (see Target) |
+| A function declared twice in one block | `warning`, the last one is used |
+| Discovery problems | `error`, see Discovery |
+| Analysis of one file throws (e.g. a stack overflow on thousands of nested parentheses) | `error`, `analysis failed: <message>`. That file yields no policies; other files are kept. Not cached |
+
+Only `error` makes rules `unknown` (see "Diagnostics and `unknown`").
+
+### Policies and symbols
+
+| Item | Detail |
+|---|---|
+| Policy | One per `allow` statement and op. `ops` has that one op. `evidence` is the `allow` line. `functions` lists the user functions the condition inlined or referenced, sorted |
+| Ops | `read` gives `read` and `list`; `get` gives `read`; `list` gives `list`; `write` gives `create`, `update`, `delete`; `create`, `update`, `delete` give themselves |
+| Target | The concatenated `match` paths with the prefix removed. The prefix is the first three segments when the first is `databases` (Storage: `b`) or a `{x}` wildcard, the second is any single segment (`{database}`, `(default)`, `my-app.appspot.com`), and the third is `documents` (Storage: `o`) or a `{x}` wildcard. A rest wildcard (or a `$(...)` segment) within the first three segments, after segments that match, can reach every document: the target is `/{<name>=**}` (`/databases/{db}/{rest=**}` and `/{path=**}` give `/{rest=**}` and `/{path=**}`). Any other path is kept in full, with a warning. `{x=**}` stays. A `$(expr)` segment in a match path becomes a rest wildcard `{_interpN=**}` (it may span segments, so it overlaps more, never less). An allow directly in the service or prefix match has target `/` |
+| Policy id | `<store>:<target>#<op>@<line>`. A second allow with the same id gets `:<col>` added (`...@12:9`) |
+| Symbol | One `match` symbol per distinct (store, target), id `<store>:<target>`, at the first `match` line that gives it. `lang` is `firestore` or `storage` |
+| Condition | `allow ...;` (no `if`) is `{ and: [] }`; `if false` is `{ or: [] }`; otherwise the normalization below, then a cleanup that flattens nested `and`/`or`, drops duplicate members that hold no `opaque`, and turns `not(not x)` into `x` |
+
+### Normalization
+
+Soundness invariant: if Firestore evaluates the source condition to true, the emitted `Expr` is not false in the
+model (an absent field is `null`; an atom that reads the actor is false for an anonymous caller). Every mapping is exact on
+non-error values and logic maps structurally. A condition that cannot be mapped exactly becomes `{ opaque }`, never a guess.
+
+Functions are inlined with lexical scope: parameters are bound to the call's arguments in the caller's scope, `let`s in order.
+A recursive call is `opaque`; so is a call past depth 20, or past 1000 inlinings in one condition (this stops exponential growth
+when functions call each other several times). Each parameter or `let` reference re-reads its bound expression; past 10000 such
+resolutions in one condition a reference is `opaque` (`let a1 = a0 && a0; let a2 = a1 && a1; ...` would otherwise double per `let`). A user function named like a built-in (`get`, `exists`, `getAfter`, `existsAfter`,
+`debug`, `bool`, `bytes`, `float`, `int`, `string`, `path`) is never inlined, and its calls are `opaque`.
+
+| Rules expression | Expr |
+|---|---|
+| `request.auth != null` / `== null` | `authenticated` / `not(authenticated)` |
+| `request.auth.uid` | `actor.uid` |
+| `request.auth.token.k` | `actor.claim.k` |
+| `resource.data.f` (Storage: `resource.metadata.f`) | `resource.f` |
+| `request.resource.data.f` (Storage: `request.resource.metadata.f`) | `incoming.f` |
+| `.data` in a Storage file, `.metadata` in a Firestore file | `opaque` |
+| Wildcard variable `x` | `param.x` |
+| Rest wildcard `{x=**}` used as an operand or path segment | `opaque` (it holds a path, not a string) |
+| `get(P).data.f` (Storage: `firestore.get(P).data.f`) | `doc(P').f` |
+| `exists(P)` (Storage: `firestore.exists(P)`) | `exists(P')` |
+| `==` `!=` `<` `>` | `eq` `ne` `lt` `gt` |
+| `x in [literals]` | `in` with an array literal |
+| `x in y` where `y` is an operand | `in` with the operand on the right; the prover matches it by identity only |
+| `&&` `\|\|` `!` | `and` `or` `not` |
+| `true` / `false` | `{ and: [] }` / `{ or: [] }` |
+| `a ? b : c` | `or[and[a, b], and[not a, c]]` |
+| A bare boolean value (`resource.data.published`) | `eq(<operand>, true)`; exact, since a rules condition must be a boolean |
+| `x.get('f', d)` on a map | `x.f` when `d` is `null` (the model's absent value), or when neither `d` nor `null` satisfies the comparison against a literal. Otherwise `opaque`. `<` and `>` with a fallback map only when both values are numbers. A non-null fallback on both sides, or on the right of `in`, is `opaque` (a `null` default is no fallback) |
+| Integer literal | A literal; past 2^53 it is `opaque` |
+| Float literal | A literal; a non-finite one (`1.0e999`) is `opaque` |
+| Anything else | `opaque` with the source text |
+
+Always `opaque`: `<=`, `>=`, `is`; `request.auth` compared with anything but `null`; `getAfter(P)` and `existsAfter(P)` (they read
+the document after the write, so they must never equal `get(P)`); dotted keys (`data['a.b']`, `get('a.b', d)`, which name one
+top-level field where `resource.a.b` would read a nested one); methods and functions with no atom (`hasAny`, `hasAll`, `hasOnly`,
+`size()`, `matches`, `request.time`, string building).
+
+**`authenticated` is per atom.** An atom that reads `request.auth` is `and[authenticated, atom]`. That covers an actor operand, an
+`exists` whose path holds `{actor.`, and a lookup (as an operand) whose path does. It is not added to the whole condition: for
+`resource.data.public == true || request.auth.uid == resource.data.owner` Firestore allows an anonymous read of a public document,
+and a whole-condition `authenticated` would deny it in the model. `request.auth.token.k` counts as reading `request.auth`.
+
+**Lookup paths (`P'`).** `P'` is the document path with the prefix removed and each `$(...)` replaced by `{operand}`. The database
+segment (`$(database)`, `(default)`) is not read and is removed: rules read only their own database, and Storage's `firestore.*`
+reads `(default)`. Each segment must be one literal or one interpolation of `actor.uid`, `actor.claim.*`, `resource.<f>`,
+`incoming.<f>` (one field deep), `param.<x>`, or a string or integer literal. Anything else (a float, a rest wildcard, a computed
+string, a nested lookup such as `$(get(...).data.x)`) makes the lookup `opaque`.
+
+**Vocabulary.** A call to a zero-parameter function that an approved `firestore-function` recognizer names becomes `{ ref: <id> }`
+in condition position, only when the file declares that name exactly once (a second declaration may have a different body than the
+one approved). In value position the function is inlined. Functions with parameters are always inlined. Recognition is by
+name: editing the body of the one recognized function keeps emitting the ref, and re-approving the vocabulary entry is the guard.
+
+**Opaque text** is the source of the smallest sub-expression that could not be mapped, whitespace collapsed, wrapping parentheses
+removed.
+
+### Cache
+
+Key: the file path, the approved recognizers and the file content, under the analyzer version (`FileCache`, see above).
+
+### Scan summary
+
+After `Scanned with ...`, `holdline scan` prints one block per rules file (`packages/cli/src/format/policy-summary.ts`), files sorted,
+nothing when there are no Firestore or Storage policies:
+
+```
+firestore.rules: 9 policies, 1 opaque sub-condition
+  opaque: <text> (line 12)
+```
+
+The count is distinct (opaque text, line) pairs. One `opaque:` line per distinct text, lines sorted, text cut at 120 characters.
+
+### Tests
+
+`packages/analyzer-firestore/test/soundness.test.ts` holds a reference interpreter of the rules subset (Firestore's error
+semantics) and an `Expr` evaluator with absent = `null`. For each of 37 normalization rows it runs 200 random worlds and checks the
+invariant, and that the row is exactly true somewhere Firestore allows. `test/emulator/` compares the Firestore emulator with the
+interpreter and the `Expr`; it is skipped, with the reason in the test title, when `firebase-tools` or Java 21 or newer is missing.
+Storage rows are checked against the model only.
 
 ## Conventions for fixtures and analyzers
 

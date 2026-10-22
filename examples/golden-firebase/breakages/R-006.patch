@@ -1,0 +1,14 @@
+diff --git a/firestore.rules b/firestore.rules
+index 15b5660..cc6e862 100644
+--- a/firestore.rules
++++ b/firestore.rules
+@@ -16,8 +16,7 @@ service cloud.firestore {
+     }
+ 
+     function validProject() {
+-      return request.resource.data.orgId != null
+-        && request.resource.data.status in ['active', 'archived'];
++      return request.resource.data.status in ['active', 'archived'];
+     }
+ 
+     match /users/{uid} {

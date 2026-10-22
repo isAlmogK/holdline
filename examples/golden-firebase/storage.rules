@@ -1,5 +1,13 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    function isMember(orgId) {
+      return firestore.exists(/databases/(default)/documents/orgs/$(orgId)/members/$(request.auth.uid));
+    }
+
+    match /orgs/{orgId}/files/{path=**} {
+      allow read: if isMember(orgId);
+      allow write: if isMember(orgId) && request.resource.size < 10 * 1024 * 1024;
+    }
   }
 }

@@ -1,3 +1,239 @@
 version: 1
-vocabulary: []
-rules: []
+vocabulary:
+  - id: signed-in
+    text: The caller is signed in
+    expr:
+      atom:
+        op: authenticated
+    recognize:
+      - firestore-function: signedIn
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: d92d93087dfc
+rules:
+  - id: R-001
+    text: Projects are read only by members of the project's organization
+    type: data-access
+    target:
+      store: firestore
+      path: /projects/{projectId}
+    ops:
+      - read
+      - list
+    requires:
+      and:
+        - ref: signed-in
+        - atom:
+            op: in
+            left: resource.orgId
+            right: doc(/users/{actor.uid}).orgIds
+    evidence:
+      - firestore:/projects/{projectId}
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: a62fcf777f7b
+  - id: R-002
+    text: Projects are created only in the caller's own organizations
+    type: data-access
+    target:
+      store: firestore
+      path: /projects/{projectId}
+    ops:
+      - create
+    requires:
+      atom:
+        op: in
+        left: incoming.orgId
+        right: doc(/users/{actor.uid}).orgIds
+    evidence:
+      - firestore:/projects/{projectId}
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: ddef533188f5
+  - id: R-003
+    text: Only organization admins update projects
+    type: data-access
+    target:
+      store: firestore
+      path: /projects/{projectId}
+    ops:
+      - update
+    requires:
+      atom:
+        op: eq
+        left: doc(/orgs/{resource.orgId}/members/{actor.uid}).role
+        right:
+          literal: admin
+    evidence:
+      - firestore:/projects/{projectId}
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 07717f5053a7
+  - id: R-004
+    text: Clients never delete projects
+    type: data-access
+    target:
+      store: firestore
+      path: /projects/{projectId}
+    ops:
+      - delete
+    requires:
+      or: []
+    evidence:
+      - firestore:/projects/{projectId}
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 7e4ac9ca46db
+  - id: R-005
+    text: Organization files are read only by organization members
+    type: data-access
+    target:
+      store: storage
+      path: /orgs/{orgId}/files/{path=**}
+    ops:
+      - read
+      - list
+    requires:
+      atom:
+        op: exists
+        doc: /orgs/{param.orgId}/members/{actor.uid}
+    evidence:
+      - storage:/orgs/{orgId}/files/{path=**}
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 2d952a1b9670
+  - id: R-006
+    text: Every project belongs to an organization
+    type: invariant
+    target:
+      store: firestore
+      path: /projects/{projectId}
+    kind: not-null
+    columns:
+      - orgId
+    evidence:
+      - firestore:/projects/{projectId}
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: f4fdf6558f45
+  - id: R-007
+    text: A project is active or archived
+    type: invariant
+    target:
+      store: firestore
+      path: /projects/{projectId}
+    kind: enum
+    columns:
+      - status
+    values:
+      - active
+      - archived
+    evidence:
+      - firestore:/projects/{projectId}
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 0ad16b55fadd
+  - id: R-008
+    text: Project notes are read only by members of the project's organization
+    type: data-access
+    target:
+      store: firestore
+      path: /projects/{projectId}/notes/{noteId}
+    ops:
+      - read
+      - list
+    requires:
+      and:
+        - ref: signed-in
+        - atom:
+            op: in
+            left: doc(/projects/{param.projectId}).orgId
+            right: doc(/users/{actor.uid}).orgIds
+    evidence:
+      - firestore:/projects/{projectId}/notes/{noteId}
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: f3b6703e13f7
+  - id: R-009
+    text: An organization's member list is read only by its members
+    type: data-access
+    target:
+      store: firestore
+      path: /orgs/{orgId}/members/{uid}
+    ops:
+      - read
+      - list
+    requires:
+      atom:
+        op: exists
+        doc: /orgs/{param.orgId}/members/{actor.uid}
+    evidence:
+      - firestore:/orgs/{orgId}/members/{uid}
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 4cb8f9b1f83a
+  - id: R-010
+    text: Users read only their own user document
+    type: data-access
+    target:
+      store: firestore
+      path: /users/{uid}
+    ops:
+      - read
+      - list
+    requires:
+      and:
+        - atom:
+            op: authenticated
+        - atom:
+            op: eq
+            left: actor.uid
+            right: param.uid
+    evidence:
+      - firestore:/users/{uid}
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: 8a68b6efcdc4
+  - id: R-011
+    text: Organization files are written only by organization members
+    type: data-access
+    target:
+      store: storage
+      path: /orgs/{orgId}/files/{path=**}
+    ops:
+      - create
+      - update
+      - delete
+    requires:
+      atom:
+        op: exists
+        doc: /orgs/{param.orgId}/members/{actor.uid}
+    evidence:
+      - storage:/orgs/{orgId}/files/{path=**}
+    status: approved
+    approved:
+      by: golden
+      at: 2026-10-21
+      hash: db5f0c04d1ee
+lastRuleId: 11

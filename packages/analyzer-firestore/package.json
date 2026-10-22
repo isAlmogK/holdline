@@ -1,0 +1,14 @@
+{
+  "name": "@holdline/analyzer-firestore",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@holdline/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0",
+    "firebase": "^13.1.0"
+  }
+}

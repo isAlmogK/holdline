@@ -1,5 +1,44 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // The caller's organizations are listed on their user document.
+    function inUserOrgs(orgId) {
+      let user = get(/databases/$(database)/documents/users/$(request.auth.uid));
+      return orgId in user.data.orgIds;
+    }
+
+    function isOrgAdmin(orgId) {
+      return get(/databases/$(database)/documents/orgs/$(orgId)/members/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function validProject() {
+      return request.resource.data.orgId != null
+        && request.resource.data.status in ['active', 'archived'];
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /orgs/{orgId} {
+      match /members/{uid} {
+        allow read: if exists(/databases/$(database)/documents/orgs/$(orgId)/members/$(request.auth.uid));
+      }
+    }
+
+    match /projects/{projectId} {
+      allow read: if signedIn() && inUserOrgs(resource.data.orgId);
+      allow create: if signedIn() && inUserOrgs(request.resource.data.orgId) && validProject();
+      allow update: if isOrgAdmin(resource.data.orgId) && validProject();
+
+      match /notes/{noteId} {
+        allow read: if signedIn()
+          && inUserOrgs(get(/databases/$(database)/documents/projects/$(projectId)).data.orgId);
+      }
+    }
   }
 }

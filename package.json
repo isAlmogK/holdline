@@ -6,7 +6,7 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -p packages/core && tsc -p packages/cli && tsc -p packages/analyzer-postgres",
+    "typecheck": "tsc -p packages/core && tsc -p packages/cli && tsc -p packages/analyzer-postgres && tsc -p packages/analyzer-firestore",
     "holdline": "tsx packages/cli/src/bin.ts"
   },
   "devDependencies": {
