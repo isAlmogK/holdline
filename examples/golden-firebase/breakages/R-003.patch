@@ -1,0 +1,13 @@
+diff --git a/firestore.rules b/firestore.rules
+index 15b5660..ca7ca9d 100644
+--- a/firestore.rules
++++ b/firestore.rules
+@@ -12,7 +12,7 @@ service cloud.firestore {
+     }
+ 
+     function isOrgAdmin(orgId) {
+-      return get(/databases/$(database)/documents/orgs/$(orgId)/members/$(request.auth.uid)).data.role == 'admin';
++      return request.auth != null;
+     }
+ 
+     function validProject() {

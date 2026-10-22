@@ -1,0 +1,13 @@
+diff --git a/firestore.rules b/firestore.rules
+index 15b5660..8cb2849 100644
+--- a/firestore.rules
++++ b/firestore.rules
+@@ -32,7 +32,7 @@ service cloud.firestore {
+ 
+     match /projects/{projectId} {
+       allow read: if signedIn() && inUserOrgs(resource.data.orgId);
+-      allow create: if signedIn() && inUserOrgs(request.resource.data.orgId) && validProject();
++      allow create: if signedIn() && validProject();
+       allow update: if isOrgAdmin(resource.data.orgId) && validProject();
+ 
+       match /notes/{noteId} {

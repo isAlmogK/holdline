@@ -1,0 +1,15 @@
+diff --git a/firestore.rules b/firestore.rules
+index 15b5660..01171ca 100644
+--- a/firestore.rules
++++ b/firestore.rules
+@@ -25,6 +25,10 @@ service cloud.firestore {
+     }
+ 
+     match /orgs/{orgId} {
++      match /{document=**} {
++        allow read: if request.auth != null;
++      }
++
+       match /members/{uid} {
+         allow read: if exists(/databases/$(database)/documents/orgs/$(orgId)/members/$(request.auth.uid));
+       }
