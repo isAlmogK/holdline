@@ -1,6 +1,6 @@
 # Holdline: Feature and Core Design
 
-**Status:** Phase 0 implemented (2026-10-21). Phases 1 to 5 are not built yet; see [As built](#as-built-phase-0).
+**Status:** Phase 0 implemented (2026-10-21), Phase 1 implemented (2026-10-22). Phases 2 to 5 are not built yet; see [As built (Phase 0)](#as-built-phase-0) and [As built (Phase 1)](#as-built-phase-1).
 
 **Repos:** holdline (this spec: the feature and the core) · dogbase (adoption, its own spec in that repo, written after Phase 1)
 
@@ -510,3 +510,14 @@ Phase 0 built `packages/core`, `packages/cli`, the `golden-ts-postgres` acceptan
 | 11 Golden apps | Only `golden-ts-postgres` exists, with hand-written facts; its breakages are JSON Patches against `fixtures/facts.json` (code patches come with the analyzers). Its README fixes the conventions analyzers must reproduce: filters reference the function's own parameters, `where` clauses become filters on every operation, every referenced class or function is a symbol, `location.line` is the declaration line. |
 
 **Left for later phases:** per-language `via` member boundaries (decided by each analyzer track), per-store attribution of diagnostics (to narrow `unknown`), how analyzer packages register in `packages/cli/src/analyzers.ts`, and flagging `holdline mute` or `holdline approve` run by an agent (spec 4).
+
+## As built (Phase 1)
+
+Phase 1 is built: `packages/analyzer-postgres`, `packages/analyzer-firestore`, `packages/testkit` with `holdline test`,
+and the `golden-supabase` and `golden-firebase` apps. Its gate holds: every data-layer breakage in the golden apps is
+caught (`scan` + `check`, and `holdline test` for data-access rules), and `holdline scan` reads DogBase's Firestore
+and Storage rules with zero error diagnostics. The [data layers spec](2026-10-21-data-layers-design.md) records how
+each part differs from its design, and the DogBase gate's opaque patterns in generic form.
+
+Of the items left for later phases above, analyzer registration was settled in Phase 1 (one import and one array
+entry in `packages/cli/src/analyzers.ts`, see `CLAUDE.md`).
